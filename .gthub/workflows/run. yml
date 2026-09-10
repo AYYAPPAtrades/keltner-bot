@@ -11,10 +11,10 @@ jobs:
     timeout-minutes: 400
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -48,5 +48,5 @@ jobs:
         if: failure()
         run: |
           curl -s -X POST "https://api.telegram.org/bot8921879577:AAHR_GPiDLyTtsrtMZx12CJ2nCM-YAUh3N0/sendMessage" \
-          -d "chat_id=6789591588" \
-          -d "text=CRITICAL ALERT: Scanner has completely STOPPED after retries. Check manually!"
+              -d "chat_id=6789591588" \
+              -d "text=CRITICAL ALERT: Scanner has completely STOPPED after retries. Check manually!"
