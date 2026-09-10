@@ -2,13 +2,13 @@ name: Dual Strategy Scanner
 
 on:
   schedule:
-    # Runs Monday to Friday at 9:15 AM IST (3:45 AM UTC)
     - cron: '45 3 * * 1-5'
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 400
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -23,5 +23,30 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Scanner
-        run: python main.py
+      - name: Run Scanner with Auto-Recovery
+        id: bot_run
+        run: |
+          MAX_RETRIES=3
+          COUNT=0
+          until python main.py; do
+            COUNT=$((COUNT+1))
+            if [ $COUNT -ge $MAX_RETRIES ]; then
+              echo "Bot failed after $MAX_RETRIES attempts."
+              exit 1
+            fi
+            echo "Bot crashed, retrying..."
+            curl -s -X POST "https://api.telegram.org/bot8921879577:AAHR_GPiDLyTtsrtMZx12CJ2nCM-YAUh3N0/sendMessage" \
+              -d "chat_id=6789591588" \
+              -d "text=WARNING: Scanner disconnected! Retrying ($COUNT/$MAX_RETRIES)..."
+            sleep 15
+            curl -s -X POST "https://api.telegram.org/bot8921879577:AAHR_GPiDLyTtsrtMZx12CJ2nCM-YAUh3N0/sendMessage" \
+              -d "chat_id=6789591588" \
+              -d "text=RECOVERY SUCCESS: Bot reconnected and resumed scanning!"
+          done
+
+      - name: Send Final Failure Alert
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot8921879577:AAHR_GPiDLyTtsrtMZx12CJ2nCM-YAUh3N0/sendMessage" \
+          -d "chat_id=6789591588" \
+          -d "text=CRITICAL ALERT: Scanner has completely STOPPED after retries. Check manually!"
