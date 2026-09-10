@@ -5,6 +5,7 @@ import requests
 import json
 import os
 from datetime import datetime
+import yfinance as yf
 from nselib import capital_market
 
 # --- TELEGRAM CONFIGURATION ---
@@ -27,18 +28,16 @@ try:
     if holidays_df is not None and not holidays_df.empty:
         if 'tradingDate' in holidays_df.columns and today_str in holidays_df['tradingDate'].values:
             reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0]
-            send_telegram_alert(f"🌴 MARKET HOLIDAY TODAY!\nReason: {reason}\nScanner will not run today. Enjoy your holiday!")
+            send_telegram_alert(f"MARKET HOLIDAY TODAY!\nReason: {reason}\nScanner will not run today. Enjoy your holiday!")
             print(f"Market Holiday: {reason}. Exiting cleanly.")
             exit(0)
 except Exception as e:
     print(f"Holiday check skipped: {e}")
 
-send_telegram_alert("🚀 DUAL SCANNER ACTIVATED!\n• Strategy 1: Keltner Channel Breakout\n• Strategy 2: Ichimoku Cloud Breakout\n• Trading Window: 09:30 AM - 03:20 PM\n• T1 (1:1.5) | T2 (1:2.0) | T3 (1:3.0)\n• Auto-Recovery, Heartbeat & Holiday Detection: Active")
-
 INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
+YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
 STRATEGIES = ["KELTNER", "ICHIMOKU"]
 TRADE_FILE = "active_trades.json"
-CANDLE_BACKUP_FILE = "candle_history.json"
 
 trade_stats = {"total_signals": 0, "target_hits": 0, "sl_hits": 0}
 last_heartbeat_hour = -1
@@ -62,41 +61,46 @@ def save_trades(trades):
     with open(TRADE_FILE, 'w') as f:
         json.dump(trades, f, indent=4)
 
-def load_candle_history():
-    if os.path.exists(CANDLE_BACKUP_FILE):
-        try:
-            with open(CANDLE_BACKUP_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {idx: [] for idx in INDEX_WATCHLIST}
-
-def save_candle_history(history):
+# --- INITIAL HISTORICAL CANDLES FETCH ---
+def get_historical_5m_candles(index_name):
     try:
-        with open(CANDLE_BACKUP_FILE, 'w') as f:
-            json.dump(history, f, indent=4)
-    except Exception:
-        pass
+        ticker = YF_TICKERS.get(index_name)
+        df_hist = yf.download(ticker, period="5d", interval="5m", progress=False)
+        if not df_hist.empty:
+            if isinstance(df_hist.columns, pd.MultiIndex):
+                df_hist.columns = df_hist.columns.get_level_values(0)
+            candles = []
+            for _, row in df_hist.tail(60).iterrows():
+                candles.append({
+                    'Open': float(row['Open']),
+                    'High': float(row['High']),
+                    'Low': float(row['Low']),
+                    'Close': float(row['Close'])
+                })
+            print(f"Loaded {len(candles)} historical 5m candles for {index_name}")
+            return candles
+    except Exception as e:
+        print(f"History Fetch Error for {index_name}: {e}")
+    return []
 
+candle_history = {idx: get_historical_5m_candles(idx) for idx in INDEX_WATCHLIST}
 active_trades = load_trades()
-candle_history = load_candle_history()
 current_candles = {idx: {"open": None, "high": -1, "low": 9999999, "close": None, "start_min": None} for idx in INDEX_WATCHLIST}
 last_signals = {idx: {"KELTNER": None, "ICHIMOKU": None} for idx in INDEX_WATCHLIST}
+
+send_telegram_alert("DUAL SCANNER ACTIVATED!\n• Strategy 1: Keltner Channel Breakout\n• Strategy 2: Ichimoku Cloud Breakout\n• Trading Window: 09:30 AM - 03:20 PM\n• Historical Data Pre-loaded (Immediate Signals Ready)")
 
 def calculate_indicators(df):
     high, low, close = df['High'], df['Low'], df['Close']
     
-    # 1. ATR (10)
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.ewm(span=10, adjust=False).mean()
     df['ATR'] = atr
     
-    # 2. Keltner Channel (20 EMA, Multiplier 1.5)
     df['KC_Middle'] = close.ewm(span=20, adjust=False).mean()
     df['KC_Upper'] = df['KC_Middle'] + (1.5 * atr)
     df['KC_Lower'] = df['KC_Middle'] - (1.5 * atr)
     
-    # 3. Ichimoku Cloud (9, 26, 52)
     tenkan = (high.rolling(window=9, min_periods=1).max() + low.rolling(window=9, min_periods=1).min()) / 2
     kijun = (high.rolling(window=26, min_periods=1).max() + low.rolling(window=26, min_periods=1).min()) / 2
     senkou_a = (tenkan + kijun) / 2
@@ -124,15 +128,14 @@ while True:
         can_take_trades = (start_trade_time <= now.time() < end_trade_time)
         is_market_closing = (now.time() >= end_trade_time)
 
-        # 03:30 PM Clean Market Shutdown
         if now.time() >= market_shutdown_time:
             summary = (
-                f"🏁 MARKET CLOSED (DAILY REPORT)\n"
-                f"📅 Date: {now.strftime('%d-%b-%Y')}\n"
+                f"MARKET CLOSED (DAILY REPORT)\n"
+                f"Date: {now.strftime('%d-%b-%Y')}\n"
                 f"• Total Signals Generated: {trade_stats['total_signals']}\n"
                 f"• Target Hits: {trade_stats['target_hits']}\n"
                 f"• Stop Loss Hits: {trade_stats['sl_hits']}\n\n"
-                f"✨ Scanner shutting down cleanly. See you tomorrow at 09:15 AM!"
+                f"Scanner shutting down cleanly. See you tomorrow at 09:15 AM!"
             )
             send_telegram_alert(summary)
             print(summary)
@@ -155,7 +158,7 @@ while True:
                             if is_market_closing:
                                 pnl = current_price - trade['entry'] if trade['type'] == 'BUY' else trade['entry'] - current_price
                                 alert = (
-                                    f"⏰ AUTO EXIT (03:20 PM CLOSED)!\n"
+                                    f"AUTO EXIT (03:20 PM CLOSED)!\n"
                                     f"Strategy: {strat}\n"
                                     f"Index: {index_name}\n"
                                     f"Exit Price: {current_price:.2f}\n"
@@ -171,24 +174,24 @@ while True:
                                 if not trade.get('t1_hit') and current_price >= trade['t1']:
                                     trade['t1_hit'] = True
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🎯 TARGET 1 HIT (1:1.5)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT1: {trade['t1']:.2f}")
+                                    send_telegram_alert(f"TARGET 1 HIT (1:1.5)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT1: {trade['t1']:.2f}")
                                     save_trades(active_trades)
 
                                 if not trade.get('t2_hit') and current_price >= trade['t2']:
                                     trade['t2_hit'] = True
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🎯 TARGET 2 HIT (1:2.0)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT2: {trade['t2']:.2f}")
+                                    send_telegram_alert(f"TARGET 2 HIT (1:2.0)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT2: {trade['t2']:.2f}")
                                     save_trades(active_trades)
 
                                 if current_price >= trade['t3']:
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🏆 ALL TARGETS HIT (T3)!\nStrategy: {strat}\nIndex: {index_name}\nExit Price: {current_price:.2f}\nT3: {trade['t3']:.2f}")
+                                    send_telegram_alert(f"ALL TARGETS HIT (T3)!\nStrategy: {strat}\nIndex: {index_name}\nExit Price: {current_price:.2f}\nT3: {trade['t3']:.2f}")
                                     active_trades[index_name][strat] = None
                                     save_trades(active_trades)
 
                                 elif current_price <= trade['sl']:
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 STOP LOSS HIT!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nSL: {trade['sl']:.2f}")
+                                    send_telegram_alert(f"STOP LOSS HIT!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nSL: {trade['sl']:.2f}")
                                     active_trades[index_name][strat] = None
                                     save_trades(active_trades)
 
@@ -196,28 +199,28 @@ while True:
                                 if not trade.get('t1_hit') and current_price <= trade['t1']:
                                     trade['t1_hit'] = True
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🎯 TARGET 1 HIT (1:1.5)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT1: {trade['t1']:.2f}")
+                                    send_telegram_alert(f"TARGET 1 HIT (1:1.5)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT1: {trade['t1']:.2f}")
                                     save_trades(active_trades)
 
                                 if not trade.get('t2_hit') and current_price <= trade['t2']:
                                     trade['t2_hit'] = True
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🎯 TARGET 2 HIT (1:2.0)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT2: {trade['t2']:.2f}")
+                                    send_telegram_alert(f"TARGET 2 HIT (1:2.0)!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nT2: {trade['t2']:.2f}")
                                     save_trades(active_trades)
 
                                 if current_price <= trade['t3']:
                                     trade_stats['target_hits'] += 1
-                                    send_telegram_alert(f"🏆 ALL TARGETS HIT (T3)!\nStrategy: {strat}\nIndex: {index_name}\nExit Price: {current_price:.2f}\nT3: {trade['t3']:.2f}")
+                                    send_telegram_alert(f"ALL TARGETS HIT (T3)!\nStrategy: {strat}\nIndex: {index_name}\nExit Price: {current_price:.2f}\nT3: {trade['t3']:.2f}")
                                     active_trades[index_name][strat] = None
                                     save_trades(active_trades)
 
                                 elif current_price >= trade['sl']:
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 STOP LOSS HIT!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nSL: {trade['sl']:.2f}")
+                                    send_telegram_alert(f"STOP LOSS HIT!\nStrategy: {strat}\nIndex: {index_name}\nPrice: {current_price:.2f}\nSL: {trade['sl']:.2f}")
                                     active_trades[index_name][strat] = None
                                     save_trades(active_trades)
 
-                    # 2. CANDLE AGGREGATION (5-MINUTE)
+                    # 2. CANDLE AGGREGATION
                     c_bucket = current_candles[index_name]
                     current_min_slot = (now.minute // 5) * 5
 
@@ -231,7 +234,6 @@ while True:
                             })
                             if len(candle_history[index_name]) > 120:
                                 candle_history[index_name].pop(0)
-                            save_candle_history(candle_history)
 
                         c_bucket["open"] = current_price
                         c_bucket["high"] = current_price
@@ -267,7 +269,7 @@ while True:
                                         t3 = round(close + (dynamic_risk * 3.0), 2)
                                         active_trades[index_name]["KELTNER"] = {'type': 'BUY', 'entry': close, 'sl': sl, 't1': t1, 't2': t2, 't3': t3, 't1_hit': False, 't2_hit': False}
                                         save_trades(active_trades)
-                                        send_telegram_alert(f"⚡ NEW SIGNAL: KELTNER BREAKOUT\nIndex: {index_name} (BUY / CALL)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
+                                        send_telegram_alert(f"NEW SIGNAL: KELTNER BREAKOUT\nIndex: {index_name} (BUY / CALL)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
 
                                 elif prev_close >= prev['KC_Lower'] and close < latest['KC_Lower']:
                                     if last_signals[index_name]["KELTNER"] != "SELL":
@@ -279,7 +281,7 @@ while True:
                                         t3 = round(close - (dynamic_risk * 3.0), 2)
                                         active_trades[index_name]["KELTNER"] = {'type': 'SELL', 'entry': close, 'sl': sl, 't1': t1, 't2': t2, 't3': t3, 't1_hit': False, 't2_hit': False}
                                         save_trades(active_trades)
-                                        send_telegram_alert(f"⚡ NEW SIGNAL: KELTNER BREAKOUT\nIndex: {index_name} (SELL / PUT)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
+                                        send_telegram_alert(f"NEW SIGNAL: KELTNER BREAKOUT\nIndex: {index_name} (SELL / PUT)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
 
                             # --- STRATEGY 2: ICHIMOKU CLOUD BREAKOUT ---
                             if active_trades[index_name]["ICHIMOKU"] is None:
@@ -293,7 +295,7 @@ while True:
                                         t3 = round(close + (dynamic_risk * 3.0), 2)
                                         active_trades[index_name]["ICHIMOKU"] = {'type': 'BUY', 'entry': close, 'sl': sl, 't1': t1, 't2': t2, 't3': t3, 't1_hit': False, 't2_hit': False}
                                         save_trades(active_trades)
-                                        send_telegram_alert(f"☁️ NEW SIGNAL: ICHIMOKU CLOUD BREAKOUT\nIndex: {index_name} (BUY / CALL)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
+                                        send_telegram_alert(f"NEW SIGNAL: ICHIMOKU CLOUD BREAKOUT\nIndex: {index_name} (BUY / CALL)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
 
                                 elif prev_close >= prev['Cloud_Bottom'] and close < latest['Cloud_Bottom']:
                                     if last_signals[index_name]["ICHIMOKU"] != "SELL":
@@ -305,14 +307,14 @@ while True:
                                         t3 = round(close - (dynamic_risk * 3.0), 2)
                                         active_trades[index_name]["ICHIMOKU"] = {'type': 'SELL', 'entry': close, 'sl': sl, 't1': t1, 't2': t2, 't3': t3, 't1_hit': False, 't2_hit': False}
                                         save_trades(active_trades)
-                                        send_telegram_alert(f"☁️ NEW SIGNAL: ICHIMOKU CLOUD BREAKOUT\nIndex: {index_name} (SELL / PUT)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
+                                        send_telegram_alert(f"NEW SIGNAL: ICHIMOKU CLOUD BREAKOUT\nIndex: {index_name} (SELL / PUT)\nTime: {current_time_str}\nEntry: {close:.2f} | SL: {sl:.2f}\nT1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}")
                     else:
                         print(f"[{current_time_str}] Building 5-min candles for {index_name}: {len(df)}/30...")
 
             # 4. HOURLY HEARTBEAT CHECK
             if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                 last_heartbeat_hour = now.hour
-                hb_msg = f"💓 STATUS: Scanner Active & Healthy!\nTime: {current_time_str}\n"
+                hb_msg = f"STATUS: Scanner Active & Healthy!\nTime: {current_time_str}\n"
                 for idx, prc in prices_dict.items():
                     hb_msg += f"• {idx}: {prc:.2f}\n"
                 send_telegram_alert(hb_msg)
