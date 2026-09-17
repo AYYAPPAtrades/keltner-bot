@@ -24,67 +24,46 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # --- TELEGRAM CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8999213661:AAHEZnM2kpGuxZknoUDsh91fNqafsNHo5RI"
-
-# ഇവിടെ നിങ്ങളുടെ പ്രൈവറ്റ് ചാനലിന്റെ ശരിയായ ഐഡി നൽകാം
-# സാധാരണയായി -100 ൽ തുടങ്ങുന്ന 13 അല്ലെങ്കിൽ 14 അക്കങ്ങളാണ് ടെലിഗ്രാം പ്രൈവറ്റ് ചാനലുകൾക്ക് ഉണ്ടാവുക
-# ഉദാഹരണത്തിന്: "-100xxxxxxxxxx"
-TARGET_CHAT_IDS = set(["-1004417570442"]) 
+# നിങ്ങളുടെ ശരിയായ പ്രൈവറ്റ് ചാനൽ ഐഡി
+TELEGRAM_CHAT_IDS = ["-1004417570442"]
 
 tele_session = requests.Session()
 
-def auto_detect_private_channels():
-    """ബോട്ട് ആഡ് ചെയ്യപ്പെട്ടിട്ടുള്ള പ്രൈവറ്റ് ചാനലുകളുടെ ഐഡി തനിയെ കണ്ടെത്തി ലിസ്റ്റിലേക്ക് ചേർക്കുന്നു"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-        res = tele_session.get(url, timeout=10).json()
-        if res.get("ok"):
-            for item in res.get("result", []):
-                chat = None
-                if "channel_post" in item:
-                    chat = item["channel_post"]["chat"]
-                elif "my_chat_member" in item:
-                    chat = item["my_chat_member"]["chat"]
-                elif "message" in item:
-                    chat = item["message"]["chat"]
-                
-                if chat and str(chat.get("id")).startswith("-100"):
-                    ch_id = str(chat.get("id"))
-                    if ch_id not in TARGET_CHAT_IDS:
-                        TARGET_CHAT_IDS.add(ch_id)
-                        print(f"✅ Auto-detected active channel ID: {ch_id}")
-    except Exception as e:
-        print(f"Channel detection check: {e}")
-
-# റൺ ആകുന്ന നിമിഷം തന്നെ ഐഡികൾ പരിശോധിക്കുന്നു
-auto_detect_private_channels()
-
 def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    for chat_id in list(TARGET_CHAT_IDS):
+    for chat_id in TELEGRAM_CHAT_IDS:
         try:
             payload = {"chat_id": chat_id, "text": msg}
             res = tele_session.post(url, json=payload, timeout=8).json()
             if not res.get("ok"):
-                print(f"⚠️ Telegram Alert Delivery Failed ({chat_id}): {res.get('description')}")
+                print(f"⚠️ Telegram Alert Delivery Error ({chat_id}): {res.get('description')}")
             else:
-                print(f"✅ Alert successfully sent to {chat_id}")
+                print(f"✅ Alert sent successfully to {chat_id}")
         except Exception as e:
             print(f"Telegram Network Error ({chat_id}): {e}")
 
 def send_telegram_document(file_path, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    for chat_id in list(TARGET_CHAT_IDS):
+    for chat_id in TELEGRAM_CHAT_IDS:
         try:
             with open(file_path, 'rb') as doc:
                 files = {'document': doc}
                 data = {'chat_id': chat_id, 'caption': caption}
                 res = requests.post(url, data=data, files=files, timeout=25).json()
                 if not res.get("ok"):
-                    print(f"⚠️ PDF Delivery Failed ({chat_id}): {res.get('description')}")
-                else:
-                    print(f"✅ PDF sent successfully to {chat_id}")
+                    print(f"⚠️ PDF Error ({chat_id}): {res.get('description')}")
         except Exception as e:
             print(f"Telegram Doc Error ({chat_id}): {e}")
+
+# --- 1. IMMEDIATE WORKFLOW RUN ALERT (റൺ ആകുമ്പോൾ ഉടനടി വരുന്ന മെസ്സേജ്) ---
+start_now = datetime.now(IST)
+send_telegram_alert(
+    "🟢 GITHUB WORKFLOW TRIGGERED!\n\n"
+    "🚀 SAS Capital Market Algo Engine is RUNNING.\n"
+    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
+    f"📅 Date: {start_now.strftime('%d-%b-%Y')}\n"
+    "📡 Channel Connection: Verified & Active ✅"
+)
 
 # --- GMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -118,11 +97,11 @@ def send_email_with_pdf(file_path, subject, body):
 # --- WELCOME MESSAGE LISTENER ---
 WELCOME_MESSAGE = (
     "👋 Welcome to SAS CAPITAL MARKET!\n\n"
-    "Real-time quantitative tracking for NIFTY 50 & BANK NIFTY indices.\n\n"
-    "🔹 Automated Camarilla Momentum Levels\n"
-    "🔹 Trailing Stop-Loss & Risk Management\n"
-    "🔹 Daily Performance Reports & Sheets\n\n"
-    "⚠️ Educational & Research Purpose Only. Not SEBI Registered."
+    "📈 Automated Algo Tracking for Nifty & Bank Nifty.\n"
+    "⚡ Live Momentum Spikes & Key Breakout Levels.\n"
+    "📊 Daily Real-Time Performance Reports.\n\n"
+    "📌 Please check the PINNED message for important Legal Disclaimers.\n"
+    "(Educational & Analysis purpose only | Not SEBI Registered)"
 )
 
 def poll_telegram_events():
@@ -133,19 +112,13 @@ def poll_telegram_events():
             params = {
                 "offset": last_update_id + 1,
                 "timeout": 15,
-                "allowed_updates": ["chat_member", "chat_join_request", "channel_post"]
+                "allowed_updates": ["chat_member", "chat_join_request"]
             }
             res = tele_session.get(url, params=params, timeout=20).json()
             if res.get("ok"):
                 for update in res.get("result", []):
                     last_update_id = update["update_id"]
 
-                    # ചാനലിൽ പോസ്റ്റ് വരുമ്പോൾ ഐഡി ഓട്ടോമാറ്റിക് ആയി ലിങ്ക് ചെയ്യുന്നു
-                    if "channel_post" in update:
-                        c_id = str(update["channel_post"]["chat"]["id"])
-                        TARGET_CHAT_IDS.add(c_id)
-
-                    # ജോയിൻ റിക്വസ്റ്റുകൾ സ്വീകരിക്കുന്നു
                     if "chat_join_request" in update:
                         cjr = update["chat_join_request"]
                         user_id = cjr.get("from", {}).get("id")
@@ -167,14 +140,14 @@ def poll_telegram_events():
 
 threading.Thread(target=poll_telegram_events, daemon=True).start()
 
-# --- WEEKEND HOLIDAY CHECK ---
+# --- WEEKEND PROTECTION ---
 today_weekday = datetime.now(IST).weekday()
 if today_weekday in [5, 6]:
     day_name = "Saturday" if today_weekday == 5 else "Sunday"
     send_telegram_alert(
         f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n\n"
         "• Status: Market is Closed.\n"
-        "• Scanner resumes Monday at 09:00 AM IST."
+        "• Resumes Monday at 09:00 AM IST."
     )
     exit(0)
 
@@ -354,15 +327,6 @@ def format_telegram_card(trade):
         "━━━━━━━━━━━━━━━━━━━━━"
     )
 
-# --- STARTUP BROADCAST ---
-send_telegram_alert(
-    f"🚀 SAS CAPITAL MARKET SCANNER ACTIVATED\n\n"
-    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-    f"🕒 Trading Session: 09:30 AM - 03:20 PM IST\n"
-    f"🛡️ Automated Risk System Active\n"
-    f"📊 Real-Time Option Levels Monitoring Started"
-)
-
 def get_live_index_data():
     try:
         return capital_market.market_watch_all_indices()
@@ -427,8 +391,6 @@ while True:
             generate_detailed_pdf_report(pdf_daily, "DAILY TRADE PERFORMANCE", today_date_str, today_records)
             send_telegram_document(pdf_daily, caption=f"📄 Daily Detailed Performance Sheet ({today_date_str})")
             send_email_with_pdf(pdf_daily, f"Daily Trading Report - {today_date_str}", summary)
-
-            print("Daily market session finished. Bot exiting safely.")
             break
 
         raw_data = get_live_index_data()
@@ -475,7 +437,6 @@ while True:
                             save_backup_state(active_trades)
                             continue
 
-                        # BUY TRADES
                         if trade['type'] == 'BUY':
                             if not trade.get('t1_hit') and current_price < trade['cut_level']:
                                 trade_stats['early_cuts'] += 1
@@ -534,7 +495,6 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                        # SELL TRADES
                         elif trade['type'] == 'SELL':
                             if not trade.get('t1_hit') and current_price > trade['cut_level']:
                                 trade_stats['early_cuts'] += 1
