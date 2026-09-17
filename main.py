@@ -64,13 +64,13 @@ INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
 YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6789591588").strip()
 
 EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com").strip()
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "465"))
-REPORT_EMAIL_SENDER = os.getenv("REPORT_EMAIL_SENDER", "").strip()
+REPORT_EMAIL_SENDER = os.getenv("REPORT_EMAIL_SENDER", "shinos99@gmail.com").strip()
 REPORT_EMAIL_PASSWORD = os.getenv("REPORT_EMAIL_PASSWORD", "").strip()
-REPORT_EMAIL_RECIPIENT = os.getenv("REPORT_EMAIL_RECIPIENT", "").strip()
+REPORT_EMAIL_RECIPIENT = os.getenv("REPORT_EMAIL_RECIPIENT", "shinos99@gmail.com").strip()
 
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "."))
 REPORT_DIR = DATA_DIR / "reports"
@@ -88,7 +88,54 @@ MAX_CONSECUTIVE_DATA_ERRORS = 6
 # NSE trading-holiday guard. Keep this list configurable/updateable.
 # The bot stays alive outside market hours, but on a listed holiday it will
 # send one reason alert and will not enter the market-processing loop.
-NSE_HOLIDAYS = set()
+# NSE trading holidays (2026). Additional dates can be supplied via
+# NSE_HOLIDAYS_EXTRA=YYYY-MM-DD,YYYY-MM-DD,... without changing the code.
+NSE_HOLIDAYS = {
+    # Republic Day
+    datetime(2026, 1, 26, tzinfo=IST).date(),
+    # Mahashivratri
+    datetime(2026, 2, 15, tzinfo=IST).date(),
+    # Holi
+    datetime(2026, 3, 4, tzinfo=IST).date(),
+    # Ram Navami
+    datetime(2026, 3, 26, tzinfo=IST).date(),
+    # Mahavir Jayanti
+    datetime(2026, 3, 31, tzinfo=IST).date(),
+    # Good Friday
+    datetime(2026, 4, 3, tzinfo=IST).date(),
+    # Dr. Ambedkar Jayanti
+    datetime(2026, 4, 14, tzinfo=IST).date(),
+    # Maharashtra Day
+    datetime(2026, 5, 1, tzinfo=IST).date(),
+    # Bakri Id
+    datetime(2026, 5, 27, tzinfo=IST).date(),
+    # Muharram
+    datetime(2026, 6, 26, tzinfo=IST).date(),
+    # Independence Day (Saturday, included for completeness)
+    datetime(2026, 8, 15, tzinfo=IST).date(),
+    # Ganesh Chaturthi
+    datetime(2026, 9, 14, tzinfo=IST).date(),
+    # Mahatma Gandhi Jayanti
+    datetime(2026, 10, 2, tzinfo=IST).date(),
+    # Dussehra
+    datetime(2026, 10, 20, tzinfo=IST).date(),
+    # Diwali Laxmi Pujan
+    datetime(2026, 11, 9, tzinfo=IST).date(),
+    # Diwali Balipratipada
+    datetime(2026, 11, 10, tzinfo=IST).date(),
+    # Guru Nanak Jayanti
+    datetime(2026, 11, 24, tzinfo=IST).date(),
+    # Christmas
+    datetime(2026, 12, 25, tzinfo=IST).date(),
+}
+_extra_holidays = os.getenv("NSE_HOLIDAYS_EXTRA", "")
+for _item in _extra_holidays.split(","):
+    _item = _item.strip()
+    if _item:
+        try:
+            NSE_HOLIDAYS.add(datetime.fromisoformat(_item).date())
+        except ValueError:
+            print(f"Ignoring invalid NSE_HOLIDAYS_EXTRA date: {_item}")
 HOLIDAY_ALERT_ONCE = True
 BOT_WATCHDOG_SECONDS = 30
 
