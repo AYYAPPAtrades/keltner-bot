@@ -23,18 +23,19 @@ from reportlab.lib import colors
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
 
-# --- TELEGRAM CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs"
-TELEGRAM_CHAT_IDS = ["8996427731", "6789591588", "@sas_capital_market"]
+# --- TELEGRAM CONFIGURATION (UPDATED) ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs")
+# സ്ക്രീൻഷോട്ടിലെ പുതിയ Chat ID & Channel മാത്രം
+TELEGRAM_CHAT_IDS = [os.getenv("TELEGRAM_CHAT_ID", "6789591588"), "@sas_capital_market"]
 CHANNEL_USERNAME = "@sas_capital_market"
 
 tele_session = requests.Session()
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
 
-# --- EMAIL CONFIGURATION ---
-SENDER_EMAIL = "shinosanthagopi@gmail.com"
-SENDER_APP_PASSWORD = "nouiwuzkyjbzsgix"
-RECEIVER_EMAILS = ["shinos99@gmail.com", "shinosanthagopi@gmail.com"]
+# --- EMAIL CONFIGURATION (UPDATED FROM SCREENSHOT) ---
+SENDER_EMAIL = os.getenv("EMAIL_SENDER", "shinos99@gmail.com")
+SENDER_APP_PASSWORD = os.getenv("EMAIL_PASSWORD", "nouiwuzkyjbzsgix")
+RECEIVER_EMAILS = [os.getenv("EMAIL_RECEIVER", "shinos99@gmail.com")]
 
 # --- WELCOME MESSAGE ---
 WELCOME_MESSAGE = (
@@ -369,7 +370,7 @@ send_telegram_alert(
     f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
     f"🕒 Trading Window: 09:30 AM - 03:20 PM IST\n"
     f"{exp_note}\n"
-    f"🛡️ Pure Nifty Mode (Bank Nifty Removed to Eliminate False SL Hits)\n"
+    f"🛡️ Pure Nifty Mode Active\n"
     f"📑 Reports: Daily & Monthly Expiry PDFs Auto-Dispatched to Telegram & Email"
 )
 
