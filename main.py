@@ -1,4 +1,3 @@
-
 import os
 import time
 import requests
@@ -23,8 +22,8 @@ from reportlab.lib import colors
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
 
-# --- TELEGRAM CONFIGURATION (SINGLE CHAT) ---
-TELEGRAM_BOT_TOKEN = "8921879577:AAHR_GPiDLyTtsrtMZx12CJ2nCM-YAUh3N0"
+# --- TELEGRAM CONFIGURATION (SAS CAPITAL MARKET BOT) ---
+TELEGRAM_BOT_TOKEN = "8999213661:AAHEZnM2kpGuxZknoUDsh91fNqafsNHo5RI"
 TELEGRAM_CHAT_ID = "6789591588"
 tele_session = requests.Session()
 
@@ -46,7 +45,7 @@ def send_telegram_document(file_path, caption=""):
     except Exception as e:
         print(f"Telegram Doc Error: {e}")
 
-# --- EMAIL CONFIGURATION (NEW GMAIL & APP PASSWORD) ---
+# --- EMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomnsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
@@ -115,7 +114,7 @@ hero_zero_sent = False
 last_heartbeat_hour = -1
 prev_close_dict = {}
 
-# --- AUTOMATIC EXPIRY DETECTION (WEEKLY & MONTHLY) ---
+# --- AUTOMATIC EXPIRY DETECTION ---
 def check_nifty_expiry_today():
     today_date = datetime.now(IST).date()
     today_str = today_date.strftime('%d-%b-%Y').upper()
@@ -136,13 +135,11 @@ def check_nifty_expiry_today():
     except Exception as e:
         print(f"Expiry fetch error: {e}")
 
-    # Default weekly Tuesday (weekday == 1)
     is_tuesday = (today_date.weekday() == 1)
     return is_tuesday, False, today_str
 
 def check_banknifty_expiry_today():
     today_date = datetime.now(IST).date()
-    # Bank Nifty weekly Wednesday (weekday == 2)
     return (today_date.weekday() == 2)
 
 # --- TRADE PERSISTENCE ---
@@ -288,7 +285,7 @@ alert_candles = {idx: {"sell_alert": None, "buy_alert": None} for idx in INDEX_W
 send_telegram_alert(
     "⚡ MOMENTUM SPIKE BOT ACTIVE\n"
     "⏰ Time: " + datetime.now(IST).strftime('%H:%M:%S IST') + "\n"
-    "• System initialized with single chat alert & direct mail.\n"
+    "• Connected to @SASCAPITALMARKET_bot\n"
     "• Monitoring NIFTY 50 & NIFTY BANK."
 )
 
@@ -680,7 +677,7 @@ while True:
                                     f"🎯 Target 3: {t3:.2f}"
                                 )
 
-            # 7. HOURLY STATUS ALERT (Every Hour with +/- Points & %)
+            # 7. HOURLY STATUS ALERT
             if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                 last_heartbeat_hour = now.hour
                 hb_msg = f"💓 HOURLY STATUS ALERT\n⏰ Time: {current_time_str}\n\n"
