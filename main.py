@@ -24,8 +24,9 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # --- TELEGRAM CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8999213661:AAHEZnM2kpGuxZknoUDsh91fNqafsNHo5RI"
-# നിങ്ങളുടെ ശരിയായ പ്രൈവറ്റ് ചാനൽ ഐഡി
-TELEGRAM_CHAT_IDS = ["-1004417570442"]
+
+# ചാനൽ ഐഡിയും നിങ്ങളുടെ വ്യക്തിഗത ഐഡിയും ഒരുമിച്ച് (രണ്ടിലേക്കും അലേർട്ടുകൾ എത്തും)
+TELEGRAM_CHAT_IDS = ["-1004417570442", "6789591588"]
 
 tele_session = requests.Session()
 
@@ -55,14 +56,14 @@ def send_telegram_document(file_path, caption=""):
         except Exception as e:
             print(f"Telegram Doc Error ({chat_id}): {e}")
 
-# --- 1. IMMEDIATE WORKFLOW RUN ALERT (റൺ ആകുമ്പോൾ ഉടനടി വരുന്ന മെസ്സേജ്) ---
+# --- IMMEDIATE WORKFLOW RUN ALERT ---
 start_now = datetime.now(IST)
 send_telegram_alert(
     "🟢 GITHUB WORKFLOW TRIGGERED!\n\n"
     "🚀 SAS Capital Market Algo Engine is RUNNING.\n"
     f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
     f"📅 Date: {start_now.strftime('%d-%b-%Y')}\n"
-    "📡 Channel Connection: Verified & Active ✅"
+    "📡 Channel & Admin Connection: Verified & Active ✅"
 )
 
 # --- GMAIL CONFIGURATION ---
@@ -129,9 +130,15 @@ def poll_telegram_events():
                                 json={"chat_id": chat_id, "user_id": user_id},
                                 timeout=6
                             )
+                            # ഉപയോക്താവിന്റെ DM-ലേക്കും നിങ്ങൾക്കും വെൽക്കം മെസ്സേജ് അയക്കുന്നു
                             tele_session.post(
                                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                                 json={"chat_id": user_id, "text": WELCOME_MESSAGE},
+                                timeout=6
+                            )
+                            tele_session.post(
+                                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                                json={"chat_id": "6789591588", "text": f"👤 New Member Joined!\nUser ID: {user_id}\n\n{WELCOME_MESSAGE}"},
                                 timeout=6
                             )
         except Exception:
