@@ -24,7 +24,7 @@ from reportlab.lib import colors
 IST = ZoneInfo("Asia/Kolkata")
 
 # --- TELEGRAM CONFIGURATION (SAS CAPITAL MARKET CHANNEL) ---
-TELEGRAM_BOT_TOKEN = "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs"
+TELEGRAM_BOT_TOKEN = "8999213661:AAHEZnM2kpGuxZknoUDsh91fNqafsNHo5RI"
 TELEGRAM_CHAT_IDS = ["-1004417570442"]
 tele_session = requests.Session()
 
