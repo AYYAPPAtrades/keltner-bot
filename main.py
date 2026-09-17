@@ -23,9 +23,9 @@ from reportlab.lib import colors
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
 
-# --- FAST DUAL TELEGRAM ENGINE (ZERO DELAY SESSION) ---
+# --- TELEGRAM CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs"
-TELEGRAM_CHAT_IDS = ["8996427731", "6789591588"]
+TELEGRAM_CHAT_IDS = ["6789591588"]
 tele_session = requests.Session()
 
 def send_telegram_alert(msg):
@@ -48,10 +48,10 @@ def send_telegram_document(file_path, caption=""):
         except Exception as e:
             print(f"Telegram Doc Delivery Error ({chat_id}): {e}")
 
-# --- EMAIL BACKUP CONFIGURATION ---
-SENDER_EMAIL = "shinosanthagopi@gmail.com"
-SENDER_APP_PASSWORD = "nouiwuzkyjbzsgix"
-RECEIVER_EMAILS = ["shinosanthagopi@gmail.com"]
+# --- GMAIL CONFIGURATION ---
+SENDER_EMAIL = "shinos99@gmail.com"
+SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
+RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
 def send_email_with_pdf(file_path, subject, body):
     try:
@@ -73,11 +73,11 @@ def send_email_with_pdf(file_path, subject, body):
         server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
         server.quit()
-        print("PDF report successfully emailed.")
+        print("PDF report successfully emailed to shinos99@gmail.com.")
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
-# --- SAS CAPITAL MARKET WELCOME MESSAGE ---
+# --- WELCOME MESSAGE ---
 WELCOME_MESSAGE = (
     "👋 *Welcome to SAS CAPITAL MARKET!*\n\n"
     "📈 Smart Quantitative Analytics & Market Pulse\n"
@@ -88,7 +88,7 @@ WELCOME_MESSAGE = (
     "*(Educational & Analysis purpose only | Not SEBI Registered)*"
 )
 
-# --- MEMBER JOIN LISTENER (AUTOMATIC WELCOME MESSAGE) ---
+# --- MEMBER JOIN LISTENER ---
 def poll_new_channel_members():
     last_update_id = 0
     while True:
@@ -120,10 +120,9 @@ def poll_new_channel_members():
             time.sleep(5)
         time.sleep(2)
 
-# Start Welcome Listener in Background
 threading.Thread(target=poll_new_channel_members, daemon=True).start()
 
-# --- 1. WEEKEND PROTECTION ---
+# --- WEEKEND PROTECTION ---
 today_weekday = datetime.now(IST).weekday()
 if today_weekday in [5, 6]:
     day_name = "Saturday" if today_weekday == 5 else "Sunday"
@@ -135,29 +134,80 @@ if today_weekday in [5, 6]:
     )
     exit(0)
 
-# --- 2. NSE OFFICIAL HOLIDAY CHECK ---
+# --- NSE HOLIDAYS CHECK ---
+nse_holidays_list = set()
 try:
     holidays_df = capital_market.holiday_trading()
-    today_str = datetime.now(IST).strftime('%d-%b-%Y')
     if holidays_df is not None and not holidays_df.empty:
-        if 'tradingDate' in holidays_df.columns and today_str in holidays_df['tradingDate'].values:
-            reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0]
-            send_telegram_alert(
-                f"🏖️ *MARKET HOLIDAY TODAY!*\n\n"
-                f"• Occasion / Reason: *{reason}*\n"
-                f"• Status: Live trading closed.\n"
-                f"• Bot shutting down cleanly."
-            )
-            exit(0)
+        if 'tradingDate' in holidays_df.columns:
+            for d in holidays_df['tradingDate'].dropna():
+                try:
+                    parsed_d = datetime.strptime(str(d).strip(), '%d-%b-%Y').date()
+                    nse_holidays_list.add(parsed_d)
+                except Exception:
+                    pass
+    today_curr = datetime.now(IST).date()
+    if today_curr in nse_holidays_list:
+        today_str = today_curr.strftime('%d-%b-%Y')
+        reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0] if 'description' in holidays_df.columns else "Official NSE Holiday"
+        send_telegram_alert(
+            f"🏖️ *MARKET HOLIDAY TODAY!*\n\n"
+            f"• Occasion: *{reason}*\n"
+            f"• Status: Live trading closed.\n"
+            f"• Bot shutting down cleanly."
+        )
+        exit(0)
 except Exception as e:
-    print(f"Holiday check skipped: {e}")
+    print(f"Holiday check note: {e}")
+
+# --- NSE DIRECT OPTION CHAIN EXPIRY RESOLVER ---
+def fetch_nse_option_chain_expiries():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br"
+    }
+    session = requests.Session()
+    try:
+        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+        response = session.get(url, headers=headers, timeout=8)
+        data = response.json()
+        raw_dates = data.get("records", {}).get("expiryDates", [])
+        
+        parsed_dates = []
+        for d_str in raw_dates:
+            try:
+                parsed_dates.append(datetime.strptime(d_str.strip(), "%d-%b-%Y").date())
+            except Exception:
+                pass
+        
+        parsed_dates.sort()
+        today = datetime.now(IST).date()
+        future_dates = [d for d in parsed_dates if d >= today]
+        
+        current_weekly_expiry = future_dates[0] if future_dates else None
+        
+        # നടപ്പ് മാസത്തിലെ ഏറ്റവും അവസാനത്തെ എക്സ്പയറി (Monthly Expiry)
+        current_month_dates = [d for d in future_dates if d.month == today.month and d.year == today.year]
+        current_monthly_expiry = current_month_dates[-1] if current_month_dates else None
+        
+        return current_weekly_expiry, current_monthly_expiry
+    except Exception as e:
+        print(f"Option Chain Fetch Warning: {e}")
+        return None, None
+
+live_weekly_exp, live_monthly_exp = fetch_nse_option_chain_expiries()
+today_date = datetime.now(IST).date()
+
+is_today_weekly_expiry = (today_date == live_weekly_exp)
+is_today_monthly_expiry = (today_date == live_monthly_exp)
 
 INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
 YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
 BACKUP_FILE = "active_trades_momentum.json"
-MONTHLY_LEDGER_FILE = "monthly_trades_ledger.json"
+EXPIRY_CYCLE_LEDGER_FILE = "expiry_cycle_trades_ledger.json"
 
-# STRATEGY NAME UPDATED
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
 
 trade_stats = {"total_signals": 0, "target_hits": 0, "sl_hits": 0, "early_cuts": 0}
@@ -168,7 +218,7 @@ pivots_alert_sent = False
 hero_zero_sent = False
 last_heartbeat_hour = -1
 
-# --- JSON PERSISTENCE SYSTEM (STATE BACKUP) ---
+# --- JSON PERSISTENCE STATE ---
 def load_backup_state():
     default_state = {idx: None for idx in INDEX_WATCHLIST}
     if os.path.exists(BACKUP_FILE):
@@ -190,23 +240,22 @@ def save_backup_state(state):
     except Exception as err:
         print(f"Backup Save Error: {err}")
 
-# --- MONTHLY LEDGER PERSISTENCE ---
-def record_to_monthly_ledger(log_entry):
+def record_to_expiry_ledger(log_entry):
     records = []
-    if os.path.exists(MONTHLY_LEDGER_FILE):
+    if os.path.exists(EXPIRY_CYCLE_LEDGER_FILE):
         try:
-            with open(MONTHLY_LEDGER_FILE, 'r') as f:
+            with open(EXPIRY_CYCLE_LEDGER_FILE, 'r') as f:
                 records = json.load(f)
         except Exception:
             records = []
     records.append(log_entry)
     try:
-        with open(MONTHLY_LEDGER_FILE, 'w') as f:
+        with open(EXPIRY_CYCLE_LEDGER_FILE, 'w') as f:
             json.dump(records, f, indent=4)
     except Exception as e:
-        print(f"Ledger save warning: {e}")
+        print(f"Ledger save error: {e}")
 
-# --- CAMARILLA PIVOT CALCULATION (R1-R4 & S1-S4) ---
+# --- CAMARILLA PIVOT CALCULATION ---
 def calculate_camarilla_pivots(index_name):
     try:
         ticker = YF_TICKERS.get(index_name)
@@ -244,7 +293,7 @@ for idx in INDEX_WATCHLIST:
 
 active_trades = load_backup_state()
 
-# --- LIVE OPTION STRIKE & ESTIMATED PREMIUM ENGINE ---
+# --- OPTION RECOMMENDATIONS ENGINE ---
 def get_option_recommendations(index_name, spot_price, signal_direction, spot_risk):
     step = 50 if index_name == "NIFTY 50" else 100
     atm_strike = int(round(spot_price / step) * step)
@@ -287,7 +336,7 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         "safe_seller_entry": otm_seller_price
     }
 
-# --- PDF REPORT ENGINE (DAILY & MONTHLY) ---
+# --- PDF REPORT ENGINE ---
 def generate_pdf_report(filename, title_text, date_str, logs_to_print):
     doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
@@ -343,15 +392,21 @@ def generate_pdf_report(filename, title_text, date_str, logs_to_print):
 
     doc.build(elements)
 
-# --- STARTUP SCANNER ALERT (09:00 AM) ---
+# --- STARTUP ALERT ---
+exp_note = ""
+if is_today_weekly_expiry:
+    exp_note = f"\n⚡ *NSE OPTION CHAIN: TODAY IS NIFTY WEEKLY EXPIRY!*"
+if is_today_monthly_expiry:
+    exp_note = f"\n🔥 *NSE OPTION CHAIN: TODAY IS MONTHLY DERIVATIVES EXPIRY!*"
+
 send_telegram_alert(
-    f"🚀 *NIFTY & BANK NIFTY SCANNER ACTIVATED*\n\n"
+    f"🚀 *NIFTY & BANK NIFTY SCANNER ACTIVATED*{exp_note}\n\n"
     f"⚡ Strategy: *{STRATEGY_DISPLAY_NAME}*\n"
-    f"🕒 Trading Window: *09:30 AM - 03:20 PM IST*\n"
+    f"🕒 Window: *09:30 AM - 03:20 PM IST*\n"
     f"🛡️ Protection: Strict SL + Early Cut + Reversal Lock\n"
-    f"🎯 Target Engine: T1 (Trail to Cost), T2 (Trail to T1), T3\n"
-    f"💵 Option Engine: Live Strike Buy & Sell Target/SL Levels Included\n"
-    f"🔥 Features: 09:05 AM Pivots + 01:15 PM Hero-Zero + PDF Ledgers"
+    f"🎯 Target Engine: T1, T2, T3\n"
+    f"💵 Option Engine: Live Strike Buy & Sell Target/SL Included\n"
+    f"📡 Expiry Engine: Direct NSE Option Chain Sync"
 )
 
 def get_live_index_data():
@@ -361,21 +416,20 @@ def get_live_index_data():
         print(f"NSE Live Fetch Note: {e}")
         return None
 
-# --- MAIN EXECUTION ENGINE (09:00 AM - 03:40 PM) ---
+# --- MAIN ENGINE LOOP ---
 while True:
     try:
         now = datetime.now(IST)
         current_time = now.time()
         current_time_str = now.strftime('%H:%M:%S')
 
-        # Schedules
         pivot_alert_time = datetime.strptime("09:05", "%H:%M").time()
         start_trade_time = datetime.strptime("09:30", "%H:%M").time()
         hero_zero_time = datetime.strptime("13:15", "%H:%M").time()
         end_trade_time = datetime.strptime("15:20", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 1. 09:05 AM CAMARILLA PIVOTS ALERT (R1-R4 & S1-S4)
+        # 1. 09:05 AM CAMARILLA PIVOTS ALERT
         if not pivots_alert_sent and current_time >= pivot_alert_time:
             pivots_alert_sent = True
             p_msg = f"📐 *DAILY CAMARILLA PIVOT LEVELS (09:05 AM IST)*\n\n"
@@ -394,13 +448,16 @@ while True:
         can_take_trades = (start_trade_time <= current_time < end_trade_time)
         is_market_closing = (current_time >= end_trade_time)
 
-        # 2. 03:40 PM DAILY CLOSING REPORT + DAILY & MONTHLY PDF
+        # 2. 03:40 PM CLOSING (DAILY REPORT ALWAYS + MONTHLY LEDGER ON MONTHLY EXPIRY ONLY)
         if current_time >= shutdown_time:
             date_str = now.strftime('%d-%b-%Y')
             total = trade_stats['total_signals']
             wins = trade_stats['target_hits']
             win_rate = (wins / total * 100) if total > 0 else 0.0
 
+            # ----------------------------------------------------
+            # A. ഡെയിലി റിപ്പോർട്ട് (എല്ലാ ദിവസവും അയക്കുന്നു)
+            # ----------------------------------------------------
             summary = (
                 f"📊 *MARKET CLOSED (DAILY REPORT)*\n\n"
                 f"⚡ Strategy: *{STRATEGY_DISPLAY_NAME}*\n"
@@ -410,29 +467,49 @@ while True:
                 f"• Stop Losses Hit: {trade_stats['sl_hits']}\n"
                 f"• Early Cuts: {trade_stats['early_cuts']}\n"
                 f"🏆 Win Rate: {win_rate:.1f}%\n\n"
-                f"📄 Dispatching Daily PDF Report..."
+                f"📄 Dispatching Daily PDF Report to shinos99@gmail.com..."
             )
             send_telegram_alert(summary)
 
-            # Daily PDF Dispatch
             pdf_daily = f"Daily_Report_{date_str}.pdf"
             generate_pdf_report(pdf_daily, "DAILY PERFORMANCE REPORT", date_str, trade_logs)
             send_telegram_document(pdf_daily, caption=f"📄 Daily Performance Report - {date_str}")
             send_email_with_pdf(pdf_daily, f"Daily Trading Report - {date_str}", summary)
 
-            # Monthly Ledger Dispatch on Month End
-            is_month_end = (now.day >= 28 and now.weekday() in [3, 4])
-            if is_month_end and os.path.exists(MONTHLY_LEDGER_FILE):
+            # ----------------------------------------------------
+            # B. പ്രതിമാസ ലെഡ്ജർ (MONTHLY EXPIRY DAY-ൽ മാത്രം അയക്കുന്നു)
+            # ----------------------------------------------------
+            if is_today_monthly_expiry and os.path.exists(EXPIRY_CYCLE_LEDGER_FILE):
                 try:
-                    with open(MONTHLY_LEDGER_FILE, 'r') as f:
-                        monthly_logs = json.load(f)
+                    with open(EXPIRY_CYCLE_LEDGER_FILE, 'r') as f:
+                        expiry_cycle_logs = json.load(f)
+                    
                     month_str = now.strftime('%B-%Y')
-                    pdf_monthly = f"Monthly_Ledger_{month_str}.pdf"
-                    generate_pdf_report(pdf_monthly, f"MONTHLY PERFORMANCE LEDGER ({month_str})", month_str, monthly_logs)
-                    send_telegram_document(pdf_monthly, caption=f"📊 Monthly Performance Ledger - {month_str}")
-                    send_email_with_pdf(pdf_monthly, f"Monthly Performance Ledger - {month_str}", f"Attached Monthly Ledger for {month_str}")
+                    pdf_expiry_ledger = f"Monthly_Expiry_Ledger_{month_str}.pdf"
+                    generate_pdf_report(
+                        pdf_expiry_ledger,
+                        f"MONTHLY EXPIRY CYCLE LEDGER ({month_str})",
+                        f"Cycle Ending: {date_str}",
+                        expiry_cycle_logs
+                    )
+                    
+                    # ടെലിഗ്രാമിലേക്കും ഇമെയിലിലേക്കും അയക്കുന്നു
+                    send_telegram_document(
+                        pdf_expiry_ledger,
+                        caption=f"📊 *MONTHLY EXPIRY CYCLE COMPLETED ({month_str})*\nCovering all trades from previous expiry to today's expiry!"
+                    )
+                    send_email_with_pdf(
+                        pdf_expiry_ledger,
+                        f"Monthly Expiry Cycle Ledger - {month_str}",
+                        f"Attached complete Monthly Expiry-to-Expiry Ledger Report for cycle ending {date_str}."
+                    )
+
+                    # അടുത്ത മാസത്തെ എക്സ്പയറി സൈക്കിളിനായി ഫയൽ ക്ലീൻ ചെയ്ത് റീസെറ്റ് ചെയ്യുന്നു
+                    with open(EXPIRY_CYCLE_LEDGER_FILE, 'w') as f:
+                        json.dump([], f)
+                    print("Monthly expiry ledger dispatched and cycle reset for next month.")
                 except Exception as ex:
-                    print(f"Monthly Ledger Dispatch Error: {ex}")
+                    print(f"Monthly Expiry Ledger Error: {ex}")
 
             print("Daily market session finished. Bot exiting safely.")
             break
@@ -450,25 +527,25 @@ while True:
                     if index_name not in prev_close_dict and 'previousClose' in row.columns:
                         prev_close_dict[index_name] = float(str(row['previousClose'].values[0]).replace(',', ''))
 
-                    # 3. HERO-ZERO EXPIRY ALERT (01:15 PM IST on Tuesday/Thursday)
-                    if not hero_zero_sent and current_time >= hero_zero_time and today_weekday in [1, 3]:
+                    # 3. HERO-ZERO SETUP (Option Chain വീക്ക്‌ലി എക്സ്പയറിയിൽ മാത്രം)
+                    if not hero_zero_sent and current_time >= hero_zero_time and is_today_weekly_expiry:
                         step = 50 if index_name == "NIFTY 50" else 100
                         atm_k = int(round(current_price / step) * step)
                         hz_msg = (
-                            f"🔥 *HERO-ZERO EXPIRY SETUP (01:15 PM IST)*\n\n"
+                            f"🔥 *HERO-ZERO WEEKLY EXPIRY SETUP (01:15 PM IST)*\n\n"
                             f"📍 Index: *{index_name}* (Spot: {current_price:.2f})\n"
                             f"🎯 *Focus Strikes (₹15 - ₹35 Low Premium Range):*\n"
                             f"• Call Option: *{atm_k + step} CE*\n"
                             f"• Put Option: *{atm_k - step} PE*\n\n"
-                            f"⚡ Strategy: Target 2x-3x on Camarilla breakout!"
+                            f"⚡ Strategy: Explosive breakout move on confirmed expiry day!"
                         )
                         send_telegram_alert(hz_msg)
                         hero_zero_sent = True
 
-                    # --- ACTIVE TRADE POSITION TRACKING ---
+                    # --- ACTIVE TRADES POSITION TRACKING ---
                     trade = active_trades[index_name]
                     if trade is not None:
-                        # 03:20 PM INTRADAY AUTO-EXIT
+                        # 03:20 PM AUTO-EXIT
                         if is_market_closing:
                             pnl = current_price - trade['entry'] if trade['type'] == 'BUY' else trade['entry'] - current_price
                             entry_log = {
@@ -477,7 +554,7 @@ while True:
                                 'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Auto-Exit 03:20'
                             }
                             trade_logs.append(entry_log)
-                            record_to_monthly_ledger(entry_log)
+                            record_to_expiry_ledger(entry_log)
 
                             send_telegram_alert(
                                 f"⏰ *AUTO EXIT (03:20 PM CLOSE)*\n\n"
@@ -490,13 +567,13 @@ while True:
                             save_backup_state(active_trades)
                             continue
 
-                        # --- BUY TRADE TRACKING ---
+                        # --- BUY TRADE ---
                         if trade['type'] == 'BUY':
                             gain = current_price - trade['entry']
                             if gain > trade.get('max_gain', 0):
                                 trade['max_gain'] = gain
 
-                            # A. False Breakout Early Cut (Drops below R3)
+                            # Early Cut
                             if not trade.get('t1_hit') and current_price < trade['cut_level']:
                                 trade_stats['early_cuts'] += 1
                                 pnl = current_price - trade['entry']
@@ -506,7 +583,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Early Cut (R3)'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"⚠️ *FALSE BREAKOUT EARLY EXIT*\n\n"
@@ -518,7 +595,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # B. Reversal Profit Lock (+30 pt spike, drops to <=10 pts)
+                            # Reversal Profit Lock
                             if trade.get('max_gain', 0) >= 30 and gain <= 10:
                                 pnl = current_price - trade['entry']
                                 trade_stats['target_hits'] += 1
@@ -528,7 +605,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Reversal Profit Lock'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🔒 *REVERSAL PROFIT LOCKED*\n\n"
@@ -540,7 +617,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # C. Stop Loss Hit
+                            # Stop Loss
                             if current_price <= trade['sl']:
                                 trade_stats['sl_hits'] += 1
                                 pnl = current_price - trade['entry']
@@ -550,7 +627,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'SL Hit'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🛑 *STOP LOSS HIT!*\n\n"
@@ -562,7 +639,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # D. Target 1 (Trail SL to Entry)
+                            # Target 1
                             if not trade.get('t1_hit') and current_price >= trade['t1']:
                                 trade['t1_hit'] = True
                                 trade['sl'] = trade['entry']
@@ -575,7 +652,7 @@ while True:
                                 )
                                 save_backup_state(active_trades)
 
-                            # E. Target 2 (Trail SL to Target 1)
+                            # Target 2
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price >= trade['t2']:
                                 trade['t2_hit'] = True
                                 trade['sl'] = trade['t1']
@@ -588,7 +665,7 @@ while True:
                                 )
                                 save_backup_state(active_trades)
 
-                            # F. Final Target 3
+                            # Target 3
                             if trade.get('t2_hit') and current_price >= trade['t3']:
                                 trade_stats['target_hits'] += 1
                                 pnl = current_price - trade['entry']
@@ -598,7 +675,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Target 3 Done'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🎯🎯🎯 *FINAL TARGET 3 HIT!*\n\n"
@@ -610,13 +687,13 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                        # --- SELL TRADE TRACKING ---
+                        # --- SELL TRADE ---
                         elif trade['type'] == 'SELL':
                             gain = trade['entry'] - current_price
                             if gain > trade.get('max_gain', 0):
                                 trade['max_gain'] = gain
 
-                            # A. False Breakdown Early Cut (Bounces above S3)
+                            # Early Cut
                             if not trade.get('t1_hit') and current_price > trade['cut_level']:
                                 trade_stats['early_cuts'] += 1
                                 pnl = trade['entry'] - current_price
@@ -626,7 +703,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Early Cut (S3)'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"⚠️ *FALSE BREAKDOWN EARLY EXIT*\n\n"
@@ -638,7 +715,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # B. Reversal Profit Lock
+                            # Reversal Profit Lock
                             if trade.get('max_gain', 0) >= 30 and gain <= 10:
                                 pnl = trade['entry'] - current_price
                                 trade_stats['target_hits'] += 1
@@ -648,7 +725,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Reversal Profit Lock'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🔒 *REVERSAL PROFIT LOCKED*\n\n"
@@ -660,7 +737,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # C. Stop Loss Hit
+                            # Stop Loss
                             if current_price >= trade['sl']:
                                 trade_stats['sl_hits'] += 1
                                 pnl = trade['entry'] - current_price
@@ -670,7 +747,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'SL Hit'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🛑 *STOP LOSS HIT!*\n\n"
@@ -682,7 +759,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                            # D. Target 1
+                            # Target 1
                             if not trade.get('t1_hit') and current_price <= trade['t1']:
                                 trade['t1_hit'] = True
                                 trade['sl'] = trade['entry']
@@ -695,7 +772,7 @@ while True:
                                 )
                                 save_backup_state(active_trades)
 
-                            # E. Target 2
+                            # Target 2
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price <= trade['t2']:
                                 trade['t2_hit'] = True
                                 trade['sl'] = trade['t1']
@@ -708,7 +785,7 @@ while True:
                                 )
                                 save_backup_state(active_trades)
 
-                            # F. Final Target 3
+                            # Target 3
                             if trade.get('t2_hit') and current_price <= trade['t3']:
                                 trade_stats['target_hits'] += 1
                                 pnl = trade['entry'] - current_price
@@ -718,7 +795,7 @@ while True:
                                     'entry': trade['entry'], 'exit': current_price, 'pnl': pnl, 'status': 'Target 3 Done'
                                 }
                                 trade_logs.append(entry_log)
-                                record_to_monthly_ledger(entry_log)
+                                record_to_expiry_ledger(entry_log)
 
                                 send_telegram_alert(
                                     f"🎯🎯🎯 *FINAL TARGET 3 HIT!*\n\n"
@@ -730,7 +807,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                    # --- ZERO-DELAY LIVE TICK BREAKOUT DETECTION ---
+                    # --- LIVE TICK BREAKOUT DETECTION ---
                     pivots = camarilla_levels.get(index_name)
                     if can_take_trades and active_trades[index_name] is None and pivots is not None:
                         r4 = pivots['R4']
@@ -738,7 +815,7 @@ while True:
                         r3 = pivots['R3']
                         s3 = pivots['S3']
 
-                        # BUY BREAKOUT (Crossing R4)
+                        # BUY BREAKOUT
                         if current_price > r4:
                             sl = round(r3, 2)
                             risk = round(current_price - sl, 2)
@@ -779,7 +856,7 @@ while True:
                             )
                             send_telegram_alert(msg)
 
-                        # SELL BREAKDOWN (Crossing S4)
+                        # SELL BREAKDOWN
                         elif current_price < s4:
                             sl = round(s3, 2)
                             risk = round(sl - current_price, 2)
@@ -820,7 +897,7 @@ while True:
                             )
                             send_telegram_alert(msg)
 
-            # --- HOURLY STATUS ALERT (+/- POINTS & %) ---
+            # 4. HOURLY STATUS ALERT
             if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                 last_heartbeat_hour = now.hour
                 hb_msg = f"💓 *HOURLY STATUS ALERT*\n⏰ Time: {current_time_str} IST\n\n"
@@ -831,7 +908,6 @@ while True:
                     hb_msg += f"• *{idx}*: {prc:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
                 send_telegram_alert(hb_msg)
 
-        # 3 സെക്കൻഡ് ഫാസ്റ്റ് റിഫ്രഷ് (സീറോ ലാഗ്)
         time.sleep(3)
 
     except Exception as loop_err:
