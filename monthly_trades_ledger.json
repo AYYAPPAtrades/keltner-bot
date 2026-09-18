@@ -23,5 +23,30 @@
         "exit_time": "03:02:45 PM",
         "pnl": 1.3999999999941792,
         "status": "Reversal Profit Lock"
+    },
+    {
+        "date": "18-Sep-2026",
+        "index": "NIFTY 50",
+        "type": "BUY",
+        "entry": 23365.9,
+        "entry_time": "02:30:23 PM",
+        "sl": 23317.32,
+        "sl_hit": false,
+        "sl_time": null,
+        "t1": 23414.48,
+        "t1_hit": false,
+        "t1_time": null,
+        "t2": 23438.77,
+        "t2_hit": false,
+        "t2_time": null,
+        "t3": 23487.35,
+        "t3_hit": false,
+        "t3_time": null,
+        "cut_level": 23317.32,
+        "max_gain": 19.799999999999272,
+        "exit_price": 23341.85,
+        "exit_time": "03:20:01 PM",
+        "pnl": -24.05000000000291,
+        "status": "Auto-Exit (03:20 PM)"
     }
 ]
