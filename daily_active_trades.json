@@ -18,27 +18,7 @@
         "t3_hit": false,
         "t3_time": null,
         "cut_level": 23317.32,
-        "max_gain": 0.0
+        "max_gain": 19.799999999999272
     },
-    "NIFTY BANK": {
-        "date": "18-Sep-2026",
-        "index": "NIFTY BANK",
-        "type": "BUY",
-        "entry": 56361.55,
-        "entry_time": "02:06:09 PM",
-        "sl": 56202.04,
-        "sl_hit": false,
-        "sl_time": null,
-        "t1": 56521.06,
-        "t1_hit": false,
-        "t1_time": null,
-        "t2": 56600.82,
-        "t2_hit": false,
-        "t2_time": null,
-        "t3": 56760.33,
-        "t3_hit": false,
-        "t3_time": null,
-        "cut_level": 56202.04,
-        "max_gain": 74.19999999999709
-    }
+    "NIFTY BANK": null
 }
