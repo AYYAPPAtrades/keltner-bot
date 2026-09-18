@@ -3,7 +3,6 @@ import time
 import requests
 import json
 import smtplib
-import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -35,17 +34,6 @@ tele_session = requests.Session()
 SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
-
-# --- WELCOME MESSAGE (FOR NEW INDIVIDUAL USERS ONLY) ---
-WELCOME_MESSAGE = (
-    f"👋 Welcome to {CHANNEL_NAME}!\n\n"
-    "📈 Smart Quantitative Analytics & Market Pulse\n"
-    "⚡ Powered by SAS Advanced Algorithmic Intelligence\n"
-    "🎯 Real-Time Market Breakouts & Precision Key Levels\n"
-    "📊 Data-Driven Dynamic Striking for Options\n\n"
-    "📌 Please check the PINNED message for important Legal Disclaimers.\n"
-    "(Educational & Analysis purpose only | Not SEBI Registered)"
-)
 
 def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -90,52 +78,6 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
-# --- CLEAN MEMBER JOIN LISTENER (NO RESTART SPAM) ---
-def poll_new_channel_members():
-    last_update_id = 0
-    # ബോട്ട് സ്റ്റാർട്ട് ചെയ്യുമ്പോൾ പഴയ ക്യൂ മുഴുവൻ ക്ലിയർ ചെയ്യുന്നു
-    try:
-        init_res = tele_session.get(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
-            params={"offset": -1}, timeout=10
-        ).json()
-        if init_res.get("ok") and init_res.get("result"):
-            last_update_id = init_res["result"][-1]["update_id"]
-    except Exception:
-        pass
-
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-            params = {
-                "offset": last_update_id + 1,
-                "timeout": 20,
-                "allowed_updates": ["chat_member"]
-            }
-            res = tele_session.get(url, params=params, timeout=25).json()
-            if res.get("ok"):
-                for update in res.get("result", []):
-                    last_update_id = update["update_id"]
-                    if "chat_member" in update:
-                        chat_member = update["chat_member"]
-                        new_status = chat_member.get("new_chat_member", {}).get("status")
-                        old_status = chat_member.get("old_chat_member", {}).get("status")
-
-                        # പുതിയതായി ജോയിൻ ചെയ്ത വ്യക്തിക്ക് മാത്രം പ്രൈവറ്റ് ഡിഎം അയക്കുന്നു
-                        if new_status == "member" and old_status in ["left", "kicked"]:
-                            user_id = chat_member.get("from", {}).get("id")
-                            if user_id:
-                                tele_session.post(
-                                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                                    json={"chat_id": user_id, "text": WELCOME_MESSAGE},
-                                    timeout=6
-                                )
-        except Exception:
-            time.sleep(5)
-        time.sleep(3)
-
-threading.Thread(target=poll_new_channel_members, daemon=True).start()
-
 # --- WEEKEND & HOLIDAY PROTECTION ---
 today_weekday = datetime.now(IST).weekday()
 if today_weekday in [5, 6]:
@@ -163,18 +105,26 @@ trade_stats = {"total_signals": 0, "target_hits": 0, "sl_hits": 0}
 prev_close_dict = {}
 last_tick_prices = {}
 camarilla_levels = {}
-pivots_alert_sent = False
+
+now_init_time = datetime.now(IST).time()
+pivots_alert_sent = now_init_time >= datetime.strptime("09:15", "%H:%M").time()
 eod_alert_sent = False
 last_heartbeat_hour = -1
 
-def init_clean_daily_state():
-    state = {idx: None for idx in INDEX_WATCHLIST}
-    try:
-        with open(BACKUP_FILE, 'w') as f:
-            json.dump(state, f, indent=4)
-    except Exception as e:
-        print(f"Init state note: {e}")
-    return state
+# --- SAFE BACKUP STATE LOADER (ബാക്കപ്പ് നഷ്ടപ്പെടാതെ സൂക്ഷിക്കുന്നു) ---
+def load_backup_state():
+    default_state = {idx: None for idx in INDEX_WATCHLIST}
+    if os.path.exists(BACKUP_FILE):
+        try:
+            with open(BACKUP_FILE, 'r') as f:
+                data = json.load(f)
+                for idx in INDEX_WATCHLIST:
+                    if idx not in data:
+                        data[idx] = None
+                return data
+        except Exception:
+            return default_state
+    return default_state
 
 def save_state(state):
     try:
@@ -228,7 +178,8 @@ def calculate_camarilla_pivots(index_name):
 for idx in INDEX_WATCHLIST:
     camarilla_levels[idx] = calculate_camarilla_pivots(idx)
 
-active_trades = init_clean_daily_state()
+# നിലവിലുള്ള ട്രേഡ് ബാക്കപ്പിൽ നിന്ന് തന്നെ ലോഡ് ചെയ്യുന്നു
+active_trades = load_backup_state()
 
 def generate_pdf_report(filename, title_text, date_text, logs):
     doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
@@ -275,16 +226,6 @@ def get_live_indices():
     except Exception:
         return None
 
-# --- WORKFLOW STARTUP ALERT (ONLY SENT TO CHANNEL ONCE PER DAY AT 09:00 AM) ---
-now_check = datetime.now(IST).time()
-if now_check < datetime.strptime("09:15", "%H:%M").time():
-    send_telegram_alert(
-        f"🚀 {CHANNEL_NAME} SCANNER ACTIVATED\n\n"
-        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-        f"🎯 Real-Time Breakout & Reversal Alerts Active\n"
-        f"🕒 Trading Window: 09:15 AM - 03:25 PM IST"
-    )
-
 # --- MAIN MONITORING & TRADING LOOP ---
 while True:
     try:
@@ -298,8 +239,8 @@ while True:
         exit_alert_time = datetime.strptime("15:25", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 09:05 AM PIVOTS ALERT
-        if not pivots_alert_sent and current_time >= pivot_alert_time:
+        # 09:05 AM PIVOTS ALERT (കൃത്യമായ സമയത്ത് മാത്രം)
+        if not pivots_alert_sent and (pivot_alert_time <= current_time < start_trade_time):
             pivots_alert_sent = True
             p_msg = f"📐 DAILY CAMARILLA LEVELS (09:05 AM)\n\n📍 Channel: {CHANNEL_NAME}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n📅 Date: {today_date_str}\n\n"
             for idx in INDEX_WATCHLIST:
@@ -479,14 +420,14 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                    # 2. NEW SIGNAL TRIGGER (BREAKOUT & SIDEWAYS REVERSAL)
+                    # 2. NEW SIGNAL TRIGGER (BREAKOUT & REVERSAL)
                     pivots = camarilla_levels.get(idx)
                     can_trade = (start_trade_time <= current_time < exit_alert_time)
 
                     if can_trade and active_trades[idx] is None and pivots is not None:
                         r4, s4, r3, s3 = pivots['R4'], pivots['S4'], pivots['R3'], pivots['S3']
 
-                        # A. BREAKOUT STRATEGY (Trending Market)
+                        # A. BREAKOUT STRATEGY
                         if current_price > r4:
                             sl = round(r3, 2)
                             risk = max(round(current_price - sl, 2), 20.0)
@@ -531,7 +472,7 @@ while True:
                                 f"🎯 T1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}"
                             )
 
-                        # B. REVERSAL STRATEGY (Sideways / Range Bounce)
+                        # B. REVERSAL STRATEGY (S3 BOUNCE / R3 REJECTION)
                         elif current_price >= s3 and prev_tick < s3:
                             sl = round(s4, 2)
                             risk = max(round(current_price - sl, 2), 20.0)
