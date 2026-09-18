@@ -48,5 +48,30 @@
         "exit_time": "03:20:01 PM",
         "pnl": -24.05000000000291,
         "status": "Auto-Exit (03:20 PM)"
+    },
+    {
+        "date": "18-Sep-2026",
+        "index": "NIFTY BANK",
+        "type": "BUY",
+        "entry": 56362.95,
+        "entry_time": "03:02:52 PM",
+        "sl": 56202.04,
+        "sl_hit": false,
+        "sl_time": null,
+        "t1": 56523.86,
+        "t1_hit": false,
+        "t1_time": null,
+        "t2": 56604.31,
+        "t2_hit": false,
+        "t2_time": null,
+        "t3": 56765.22,
+        "t3_hit": false,
+        "t3_time": null,
+        "cut_level": 56202.04,
+        "max_gain": 23.200000000004366,
+        "exit_price": 56360.2,
+        "exit_time": "03:20:01 PM",
+        "pnl": -2.75,
+        "status": "Auto-Exit (03:20 PM)"
     }
 ]
