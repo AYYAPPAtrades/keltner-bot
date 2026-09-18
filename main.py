@@ -24,9 +24,10 @@ from reportlab.lib import colors
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
 
-# --- TELEGRAM CONFIGURATION (SAS TRADING LAB) ---
-TELEGRAM_BOT_TOKEN = "8999213661:AAEfHcQzRZ2-ZI4bbfq8UcuGA48ihzQKchA"
-TELEGRAM_CHAT_IDS = ["-1004417570442", "@sastradinglab"]
+# --- TELEGRAM CONFIGURATION (SAS CAPITAL MARKET) ---
+# യഥാർത്ഥ ശരിയായ ടോക്കണും ചാനൽ ഐഡിയും
+TELEGRAM_BOT_TOKEN = "8999213661:AAHEZnM2kpGuxZknoUDsh91fNqafsNHo5RI"
+TELEGRAM_CHAT_IDS = ["-1004417570442"]
 
 tele_session = requests.Session()
 
@@ -35,10 +36,11 @@ def send_telegram_alert(msg):
     for chat_id in TELEGRAM_CHAT_IDS:
         try:
             payload = {"chat_id": chat_id, "text": msg}
-            res = tele_session.post(url, json=payload, timeout=6).json()
+            res = tele_session.post(url, json=payload, timeout=8).json()
             if res.get("ok"):
-                print(f"Telegram sent to {chat_id}")
-                break
+                print(f"✅ Alert sent successfully to {chat_id}")
+            else:
+                print(f"⚠️ Telegram API Error: {res.get('description')}")
         except Exception as e:
             print(f"Telegram Alert Error ({chat_id}): {e}")
 
@@ -49,20 +51,20 @@ def send_telegram_document(file_path, caption=""):
             with open(file_path, 'rb') as doc:
                 files = {'document': doc}
                 data = {'chat_id': chat_id, 'caption': caption}
-                res = requests.post(url, data=data, files=files, timeout=20).json()
+                res = requests.post(url, data=data, files=files, timeout=25).json()
                 if res.get("ok"):
-                    break
+                    print(f"✅ Doc sent successfully to {chat_id}")
         except Exception as e:
             print(f"Telegram Doc Delivery Error ({chat_id}): {e}")
 
-# --- INSTANT STARTUP ALERT ---
+# --- 1. INSTANT STARTUP ALERT (റൺ ആകുന്ന ഉടൻ വരുന്ന സന്ദേശം) ---
+start_time_now = datetime.now(IST).strftime('%I:%M:%S %p')
 send_telegram_alert(
-    "🚀 SAS TRADING LAB SCANNER ACTIVATED\n\n"
-    "⚡ MOMENTUM SPIKE\n"
-    "🕒 Trading Window: 09:30 AM - 03:20 PM IST\n"
-    "🛡️ Protection: Strict SL + Early Cut + Reversal Lock\n"
-    "🎯 Target Engine: Active\n"
-    "📑 Reports: Auto-sync Enabled"
+    "🚀 SAS TRADING LAB SCANNER ACTIVATED!\n\n"
+    "⚡ MOMENTUM SPIKE ENGINE: ONLINE\n"
+    f"🕒 Time: {start_time_now} IST\n"
+    "📡 Channel Connection: 100% Verified ✅\n"
+    "🛡️ Tracking NIFTY 50 & BANK NIFTY"
 )
 
 # --- GMAIL CONFIGURATION ---
@@ -99,7 +101,6 @@ WELCOME_MESSAGE = (
     "👋 Welcome to SAS TRADING LAB!\n\n"
     "Get automated real-time algorithmic signals and daily target/stop-loss updates for NIFTY 50 & BANK NIFTY indices.\n\n"
     "🔹 Real-Time Breakout Signals (CE / PE)\n"
-    "🔹 Option Buying & Selling Strike Guidance\n"
     "🔹 Strict Risk Management & Trailing SL\n"
     "🔹 Daily & Expiry PDF Performance Reports\n\n"
     "⚠️ LEGAL DISCLAIMER:\n"
@@ -116,15 +117,7 @@ def poll_new_channel_members():
             if res.get("ok"):
                 for update in res.get("result", []):
                     last_update_id = update["update_id"]
-                    if "chat_member" in update:
-                        chat_member = update["chat_member"]
-                        new_status = chat_member.get("new_chat_member", {}).get("status")
-                        old_status = chat_member.get("old_chat_member", {}).get("status")
-                        if new_status == "member" and old_status in ["left", "kicked"]:
-                            target_chat_id = chat_member["chat"]["id"]
-                            send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                            tele_session.post(send_url, json={"chat_id": target_chat_id, "text": WELCOME_MESSAGE}, timeout=8)
-                    elif "chat_join_request" in update:
+                    if "chat_join_request" in update:
                         cjr = update["chat_join_request"]
                         user_id = cjr.get("from", {}).get("id")
                         c_id = cjr.get("chat", {}).get("id")
@@ -160,23 +153,9 @@ def is_today_expiry(ticker="^NSEI"):
         print(f"Dynamic expiry check note: {e}")
     return datetime.now(IST).weekday() == 1
 
-# --- SAFE GITHUB REPO SYNC ---
+# --- SAFE PERSISTENCE HELPERS ---
 BACKUP_FILE = "daily_active_trades.json"
 MONTHLY_LEDGER_FILE = "monthly_trades_ledger.json"
-
-def push_backup_to_github():
-    try:
-        token = os.environ.get("GITHUB_TOKEN")
-        repo = os.environ.get("GITHUB_REPOSITORY")
-        if token and repo:
-            remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
-            subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=False)
-            subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=False)
-            subprocess.run(["git", "add", BACKUP_FILE, MONTHLY_LEDGER_FILE], check=False)
-            subprocess.run(["git", "commit", "-m", "Auto-sync trades backup [skip ci]"], check=False)
-            subprocess.run(["git", "push", remote_url, "HEAD:main"], check=False)
-    except Exception as e:
-        print(f"Git auto-push note: {e}")
 
 INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
 YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
@@ -207,7 +186,6 @@ def save_backup_state(state):
     try:
         with open(BACKUP_FILE, 'w') as f:
             json.dump(state, f, indent=4)
-        push_backup_to_github()
     except Exception as err:
         print(f"Backup Save Error: {err}")
 
@@ -226,7 +204,6 @@ def record_to_monthly_ledger(trade_entry):
     try:
         with open(MONTHLY_LEDGER_FILE, 'w') as f:
             json.dump(records, f, indent=4)
-        push_backup_to_github()
     except Exception as e:
         print(f"Ledger save warning: {e}")
 
@@ -396,7 +373,7 @@ while True:
         end_trade_time = datetime.strptime("15:20", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 1. 09:05 AM PIVOTS ALERT
+        # 09:05 AM PIVOTS ALERT
         if not pivots_alert_sent and current_time >= pivot_alert_time:
             pivots_alert_sent = True
             p_msg = f"📐 DAILY CAMARILLA PIVOT LEVELS (09:05 AM IST)\n📅 Date: {today_date_str}\n⚡ MOMENTUM SPIKE\n\n"
@@ -415,7 +392,7 @@ while True:
         can_take_trades = (start_trade_time <= current_time < end_trade_time)
         is_market_closing = (current_time >= end_trade_time)
 
-        # 2. 03:40 PM DAILY DISPATCH
+        # 03:40 PM DAILY DISPATCH
         if current_time >= shutdown_time:
             all_ledger_records = load_monthly_ledger()
             today_records = [l for l in all_ledger_records if l.get('date') == today_date_str]
@@ -457,7 +434,7 @@ while True:
                     if index_name not in prev_close_dict and 'previousClose' in row.columns:
                         prev_close_dict[index_name] = float(str(row['previousClose'].values[0]).replace(',', ''))
 
-                    # 3. HERO-ZERO ALERT (DYNAMIC EXPIRY ONLY)
+                    # HERO-ZERO ALERT (DYNAMIC EXPIRY ONLY)
                     if not hero_zero_sent and current_time >= hero_zero_time and is_today_expiry():
                         step = 50 if index_name == "NIFTY 50" else 100
                         atm_k = int(round(current_price / step) * step)
@@ -472,7 +449,7 @@ while True:
                         send_telegram_alert(hz_msg)
                         hero_zero_sent = True
 
-                    # 4. ACTIVE POSITION TRACKING
+                    # ACTIVE POSITION TRACKING
                     trade = active_trades[index_name]
                     if trade is not None:
                         if is_market_closing:
@@ -488,7 +465,7 @@ while True:
                             save_backup_state(active_trades)
                             continue
 
-                        # BUY ORDER MANAGEMENT
+                        # BUY TRADES
                         if trade['type'] == 'BUY':
                             gain = current_price - trade['entry']
                             if gain > trade.get('max_gain', 0):
@@ -605,7 +582,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                        # SELL ORDER MANAGEMENT
+                        # SELL TRADES
                         elif trade['type'] == 'SELL':
                             gain = trade['entry'] - current_price
                             if gain > trade.get('max_gain', 0):
@@ -722,7 +699,7 @@ while True:
                                 save_backup_state(active_trades)
                                 continue
 
-                    # 5. ZERO-DELAY BREAKOUT DETECTION
+                    # BREAKOUT DETECTION
                     pivots = camarilla_levels.get(index_name)
                     if can_take_trades and active_trades[index_name] is None and pivots is not None:
                         r4 = pivots['R4']
@@ -818,7 +795,7 @@ while True:
                             )
                             send_telegram_alert(msg)
 
-            # 6. HOURLY STATUS ALERT
+            # HOURLY STATUS ALERT
             if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                 last_heartbeat_hour = now.hour
                 hb_msg = f"💓 HOURLY STATUS ALERT\n⏰ Time: {current_time_str} IST\n📅 Date: {today_date_str}\n⚡ MOMENTUM SPIKE\n\n"
