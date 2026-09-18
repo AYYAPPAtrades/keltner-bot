@@ -137,6 +137,20 @@ if today_weekday in [5, 6]:
     )
     exit(0)
 
+# --- DYNAMIC EXPIRY DETECTOR (HOLIDAY PROOF) ---
+def is_today_expiry(ticker="^NSEI"):
+    """Holiday vannal expiry munnottu maarunnathellaam yfinance vazhi live aayi check cheyyunnu"""
+    try:
+        t = yf.Ticker(ticker)
+        expiries = t.options
+        if expiries:
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            return expiries[0] == today_str
+    except Exception as e:
+        print(f"Dynamic expiry check note: {e}")
+    # yfinance ninnu details kittaathe varikayaanenkil maathram standard Tuesday check cheyyum
+    return datetime.now(IST).weekday() == 1
+
 # --- GITHUB REPO AUTO-SYNC ---
 BACKUP_FILE = "daily_active_trades.json"
 MONTHLY_LEDGER_FILE = "monthly_trades_ledger.json"
@@ -444,8 +458,8 @@ while True:
                     if index_name not in prev_close_dict and 'previousClose' in row.columns:
                         prev_close_dict[index_name] = float(str(row['previousClose'].values[0]).replace(',', ''))
 
-                    # 3. HERO-ZERO ALERT (01:15 PM)
-                    if not hero_zero_sent and current_time >= hero_zero_time:
+                    # 3. HERO-ZERO ALERT (01:15 PM - DYNAMIC EXPIRY ONLY)
+                    if not hero_zero_sent and current_time >= hero_zero_time and is_today_expiry():
                         step = 50 if index_name == "NIFTY 50" else 100
                         atm_k = int(round(current_price / step) * step)
                         hz_msg = (
