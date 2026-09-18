@@ -37,6 +37,7 @@ def send_telegram_alert(msg):
             payload = {"chat_id": chat_id, "text": msg}
             res = tele_session.post(url, json=payload, timeout=6).json()
             if res.get("ok"):
+                print(f"Telegram sent to {chat_id}")
                 break
         except Exception as e:
             print(f"Telegram Alert Error ({chat_id}): {e}")
@@ -53,6 +54,16 @@ def send_telegram_document(file_path, caption=""):
                     break
         except Exception as e:
             print(f"Telegram Doc Delivery Error ({chat_id}): {e}")
+
+# --- INSTANT STARTUP ALERT ---
+send_telegram_alert(
+    "🚀 SAS TRADING LAB SCANNER ACTIVATED\n\n"
+    "⚡ MOMENTUM SPIKE\n"
+    "🕒 Trading Window: 09:30 AM - 03:20 PM IST\n"
+    "🛡️ Protection: Strict SL + Early Cut + Reversal Lock\n"
+    "🎯 Target Engine: Active\n"
+    "📑 Reports: Auto-sync Enabled"
+)
 
 # --- GMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -79,7 +90,7 @@ def send_email_with_pdf(file_path, subject, body):
         server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
         server.quit()
-        print("PDF successfully emailed to shinos99@gmail.com.")
+        print("PDF successfully emailed.")
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
@@ -137,9 +148,8 @@ if today_weekday in [5, 6]:
     )
     exit(0)
 
-# --- DYNAMIC EXPIRY DETECTOR (HOLIDAY PROOF) ---
+# --- DYNAMIC EXPIRY DETECTOR ---
 def is_today_expiry(ticker="^NSEI"):
-    """Holiday vannal expiry munnottu maarunnathellaam yfinance vazhi live aayi check cheyyunnu"""
     try:
         t = yf.Ticker(ticker)
         expiries = t.options
@@ -148,22 +158,23 @@ def is_today_expiry(ticker="^NSEI"):
             return expiries[0] == today_str
     except Exception as e:
         print(f"Dynamic expiry check note: {e}")
-    # yfinance ninnu details kittaathe varikayaanenkil maathram standard Tuesday check cheyyum
     return datetime.now(IST).weekday() == 1
 
-# --- GITHUB REPO AUTO-SYNC ---
+# --- SAFE GITHUB REPO SYNC ---
 BACKUP_FILE = "daily_active_trades.json"
 MONTHLY_LEDGER_FILE = "monthly_trades_ledger.json"
 
 def push_backup_to_github():
     try:
-        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=False)
-        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=False)
-        subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
-        subprocess.run(["git", "add", BACKUP_FILE, MONTHLY_LEDGER_FILE], check=False)
-        subprocess.run(["git", "commit", "-m", "Auto-sync trades backup [skip ci]"], check=False)
-        subprocess.run(["git", "push", "origin", "main"], check=False)
-        print("Backup successfully synced to GitHub repository.")
+        token = os.environ.get("GITHUB_TOKEN")
+        repo = os.environ.get("GITHUB_REPOSITORY")
+        if token and repo:
+            remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+            subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=False)
+            subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=False)
+            subprocess.run(["git", "add", BACKUP_FILE, MONTHLY_LEDGER_FILE], check=False)
+            subprocess.run(["git", "commit", "-m", "Auto-sync trades backup [skip ci]"], check=False)
+            subprocess.run(["git", "push", remote_url, "HEAD:main"], check=False)
     except Exception as e:
         print(f"Git auto-push note: {e}")
 
@@ -364,16 +375,6 @@ def format_telegram_card(trade):
         "━━━━━━━━━━━━━━━━━━━━━"
     )
 
-# --- 09:00 AM STARTUP SCANNER ALERT ---
-send_telegram_alert(
-    "🚀 NIFTY & BANK NIFTY SCANNER ACTIVATED\n\n"
-    "⚡ MOMENTUM SPIKE\n"
-    "🕒 Trading Window: 09:30 AM - 03:20 PM IST\n"
-    "🛡️ Protection: Strict SL + Early Cut + Reversal Lock\n"
-    "🎯 Target Engine: T1 Achieved locks profit (No SL hit after T1)\n"
-    "📑 Reports: Daily & Expiry-to-Expiry PDF Dispatched to Channel"
-)
-
 def get_live_index_data():
     try:
         return capital_market.market_watch_all_indices()
@@ -433,7 +434,7 @@ while True:
                 f"• Early Cuts: {trade_stats['early_cuts']}\n"
                 f"🏆 Win Rate: {win_rate:.1f}%\n"
                 f"📚 Total Cycle Trades: {len(all_ledger_records)}\n\n"
-                f"Dispatching reports to shinos99@gmail.com & Channel..."
+                f"Dispatching reports to Channel..."
             )
             send_telegram_alert(summary)
 
@@ -441,8 +442,6 @@ while True:
             generate_detailed_pdf_report(pdf_daily, "DAILY TRADE PERFORMANCE", today_date_str, today_records)
             send_telegram_document(pdf_daily, caption=f"📄 Daily Detailed Report ({today_date_str})")
             send_email_with_pdf(pdf_daily, f"Daily Trading Report - {today_date_str}", summary)
-
-            print("Daily market session finished. Bot exiting safely.")
             break
 
         raw_data = get_live_index_data()
@@ -458,7 +457,7 @@ while True:
                     if index_name not in prev_close_dict and 'previousClose' in row.columns:
                         prev_close_dict[index_name] = float(str(row['previousClose'].values[0]).replace(',', ''))
 
-                    # 3. HERO-ZERO ALERT (01:15 PM - DYNAMIC EXPIRY ONLY)
+                    # 3. HERO-ZERO ALERT (DYNAMIC EXPIRY ONLY)
                     if not hero_zero_sent and current_time >= hero_zero_time and is_today_expiry():
                         step = 50 if index_name == "NIFTY 50" else 100
                         atm_k = int(round(current_price / step) * step)
