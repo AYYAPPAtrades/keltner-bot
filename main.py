@@ -24,9 +24,10 @@ from reportlab.lib import colors
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
 
-# --- TELEGRAM CONFIGURATION (SAS TRADING LAB CHANNEL ONLY) ---
-TELEGRAM_BOT_TOKEN = "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs"
+# --- TELEGRAM CONFIGURATION (SAS TRADING LAB CHANNEL ONLY) --
+TELEGRAM_BOT_TOKEN = "8999213661:AAEfHcQzRZ2-ZI4bbfq8UcuGA48ihzQKchA"
 TELEGRAM_CHAT_IDS = ["-1004417570442"]
+
 tele_session = requests.Session()
 
 def send_telegram_alert(msg):
