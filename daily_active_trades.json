@@ -1,25 +1,5 @@
 {
-    "NIFTY 50": {
-        "date": "18-Sep-2026",
-        "index": "NIFTY 50",
-        "type": "BUY",
-        "entry": 23365.9,
-        "entry_time": "02:30:23 PM",
-        "sl": 23317.32,
-        "sl_hit": false,
-        "sl_time": null,
-        "t1": 23414.48,
-        "t1_hit": false,
-        "t1_time": null,
-        "t2": 23438.77,
-        "t2_hit": false,
-        "t2_time": null,
-        "t3": 23487.35,
-        "t3_hit": false,
-        "t3_time": null,
-        "cut_level": 23317.32,
-        "max_gain": 19.799999999999272
-    },
+    "NIFTY 50": null,
     "NIFTY BANK": {
         "date": "18-Sep-2026",
         "index": "NIFTY BANK",
@@ -39,6 +19,6 @@
         "t3_hit": false,
         "t3_time": null,
         "cut_level": 56202.04,
-        "max_gain": 0.0
+        "max_gain": 23.200000000004366
     }
 }
