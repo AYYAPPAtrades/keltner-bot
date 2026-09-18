@@ -1,0 +1,27 @@
+[
+    {
+        "date": "18-Sep-2026",
+        "index": "NIFTY BANK",
+        "type": "BUY",
+        "entry": 56361.55,
+        "entry_time": "02:06:09 PM",
+        "sl": 56202.04,
+        "sl_hit": false,
+        "sl_time": null,
+        "t1": 56521.06,
+        "t1_hit": false,
+        "t1_time": null,
+        "t2": 56600.82,
+        "t2_hit": false,
+        "t2_time": null,
+        "t3": 56760.33,
+        "t3_hit": false,
+        "t3_time": null,
+        "cut_level": 56202.04,
+        "max_gain": 122.54999999999563,
+        "exit_price": 56362.95,
+        "exit_time": "03:02:45 PM",
+        "pnl": 1.3999999999941792,
+        "status": "Reversal Profit Lock"
+    }
+]
