@@ -24,7 +24,11 @@ start_now = datetime.now(IST)
 
 # --- TELEGRAM CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8999213661:AAEfHcQzRZ2-ZI4bbfq8UcuGA48ihzQKchA"
-TELEGRAM_CHAT_IDS = ["@sastradinglab", "6789591588"]
+
+# ചാനലും പേഴ്സണൽ ചാറ്റും വേർതിരിക്കുന്നു
+ADMIN_CHAT_ID = "6789591588"
+CHANNEL_CHAT_ID = "@sastradinglab"
+PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
@@ -34,9 +38,19 @@ SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
+# 1. അഡ്മിന് മാത്രമുള്ള സിസ്റ്റം അപ്‌ഡേറ്റുകൾ
+def send_admin_alert(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        payload = {"chat_id": ADMIN_CHAT_ID, "text": msg}
+        tele_session.post(url, json=payload, timeout=4)
+    except Exception as e:
+        print(f"Admin Alert Error: {e}")
+
+# 2. ചാനലിലുള്ള എല്ലാവർക്കും നിങ്ങൾക്കും ലഭിക്കുന്ന സിഗ്നലുകളും അലേർട്ടുകളും
 def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    for chat_id in TELEGRAM_CHAT_IDS:
+    for chat_id in PUBLIC_ALERT_IDS:
         try:
             payload = {"chat_id": chat_id, "text": msg}
             tele_session.post(url, json=payload, timeout=4)
@@ -45,7 +59,7 @@ def send_telegram_alert(msg):
 
 def send_telegram_document(file_path, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    for chat_id in TELEGRAM_CHAT_IDS:
+    for chat_id in PUBLIC_ALERT_IDS:
         try:
             with open(file_path, 'rb') as doc:
                 files = {'document': doc}
@@ -77,11 +91,11 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
-# --- WEEKEND & HOLIDAY PROTECTION ---
+# --- WEEKEND & HOLIDAY PROTECTION (ADMIN ALERT ONLY) ---
 today_weekday = datetime.now(IST).weekday()
 if today_weekday in [5, 6]:
     day_name = "Saturday" if today_weekday == 5 else "Sunday"
-    send_telegram_alert(f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n\n• Market is closed today.\n• Resumes Monday at 09:00 AM IST.")
+    send_admin_alert(f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n\n• Market is closed today.\n• Resumes Monday at 09:00 AM IST.")
     exit(0)
 
 try:
@@ -90,7 +104,7 @@ try:
     if holidays_df is not None and not holidays_df.empty:
         if 'tradingDate' in holidays_df.columns and today_str in holidays_df['tradingDate'].values:
             reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0]
-            send_telegram_alert(f"🏖️ NSE MARKET HOLIDAY TODAY!\n\n• Reason: {reason}\n• Scanner resting safely.")
+            send_admin_alert(f"🏖️ NSE MARKET HOLIDAY TODAY!\n\n• Reason: {reason}\n• Scanner resting safely.")
             exit(0)
 except Exception as e:
     print(f"Holiday check note: {e}")
@@ -215,8 +229,8 @@ def get_live_indices():
     except Exception:
         return None
 
-# STARTUP NOTIFICATION
-send_telegram_alert(
+# STARTUP NOTIFICATION (ADMIN ONLY)
+send_admin_alert(
     "🚀 ALGO SCANNER LIVE\n\n"
     f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
     f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
@@ -236,7 +250,7 @@ while True:
         exit_alert_time = datetime.strptime("15:25", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 09:05 AM PIVOTS
+        # 09:05 AM PIVOTS (PUBLIC ALERT - ചാനലിലേക്കും നിങ്ങൾക്കും)
         if not pivots_alert_sent and current_time >= pivot_alert_time:
             pivots_alert_sent = True
             p_msg = f"📐 DAILY CAMARILLA LEVELS (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
@@ -246,7 +260,7 @@ while True:
                     p_msg += f"🔹 {idx}\n• R4: {lvl['R4']:.2f} | R3: {lvl['R3']:.2f}\n• S3: {lvl['S3']:.2f} | S4: {lvl['S4']:.2f}\n\n"
             send_telegram_alert(p_msg)
 
-        # 03:25 PM EXIT ALERT
+        # 03:25 PM EXIT ALERT (PUBLIC ALERT)
         if current_time >= exit_alert_time and not eod_alert_sent:
             eod_alert_sent = True
             send_telegram_alert("⚠️ INTRADAY AUTO-EXIT ALERT (03:25 PM)\n\n• Market closing soon.\n• Squaring off all active positions safely.")
@@ -263,7 +277,7 @@ while True:
                     active_trades[idx] = None
             save_state(active_trades)
 
-        # 03:40 PM SHUTDOWN & PDF DISPATCH
+        # 03:40 PM SHUTDOWN & PDF DISPATCH (PUBLIC ALERT)
         if current_time >= shutdown_time:
             records = load_monthly_ledger()
             today_recs = [r for r in records if r.get('date') == today_date_str]
@@ -299,7 +313,7 @@ while True:
 
                     trade = active_trades[idx]
 
-                    # 1. POSITION TRACKING (TARGETS & STOP LOSS)
+                    # 1. POSITION TRACKING (TARGETS & STOP LOSS - PUBLIC ALERTS)
                     if trade is not None:
                         # BUY TRADE
                         if trade['type'] == 'BUY':
@@ -415,7 +429,7 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                    # 2. NEW SIGNAL TRIGGER (FIBONACCI RATIOS)
+                    # 2. NEW SIGNAL TRIGGER (FIBONACCI RATIOS - PUBLIC ALERTS)
                     pivots = camarilla_levels.get(idx)
                     can_trade = (start_trade_time <= current_time < exit_alert_time)
 
@@ -482,7 +496,7 @@ while True:
                                 f"🎯 Target 3: {t3:.2f}"
                             )
 
-            # 3. HOURLY STATUS ALERT
+            # 3. HOURLY STATUS ALERT (ADMIN ONLY - ചാനലിൽ സ്പാം ഒഴിവാക്കാൻ)
             if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                 last_heartbeat_hour = now.hour
                 hb_msg = f"💓 HOURLY STATUS ALERT\n⏰ Time: {current_time.strftime('%I:%M:00 %p')} IST\n\n"
@@ -491,7 +505,7 @@ while True:
                     diff = prc - prev_c
                     pct = (diff / prev_c) * 100 if prev_c != 0 else 0.0
                     hb_msg += f"• {idx}: {prc:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
-                send_telegram_alert(hb_msg)
+                send_admin_alert(hb_msg)
 
         time.sleep(1)
 
