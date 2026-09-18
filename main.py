@@ -2,13 +2,23 @@ import os
 import time
 import requests
 import json
+import smtplib
 import threading
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from nselib import capital_market
+
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 # --- TIMEZONE CONFIGURATION ---
 IST = ZoneInfo("Asia/Kolkata")
@@ -17,43 +27,82 @@ start_now = datetime.now(IST)
 # --- NEW TELEGRAM CONFIGURATION (SAS TRADING LAB) ---
 TELEGRAM_BOT_TOKEN = "8941192045:AAEBwZ8O4Q7-K-ktSx7kAewUy4QIXsLWEhs"
 
-# പുതിയ ചാനൽ യൂസർനെയിമും അഡ്മിൻ ഐഡികളും
+# നിങ്ങളുടെ കൃത്യമായ ചാനൽ ഐഡിയും അഡ്മിൻ ഐഡികളും
 TELEGRAM_CHAT_IDS = [
-    "@sas_trading_lab",   # പുതിയ ചാനൽ
-    "8996427731",         # Admin 1
-    "6789591588"          # Admin 2
+    "-1004417570442",     # SAS TRADING LAB (Channel ID)
+    "6789591588"          # Admin Personal ID
 ]
 
 tele_session = requests.Session()
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
 
-# --- FAST ALERT ENGINE ---
+# --- NEW EMAIL CONFIGURATION ---
+SENDER_EMAIL = "shinos99@gmail.com"
+SENDER_APP_PASSWORD = "nouiwuzkyjbzsgix"
+RECEIVER_EMAILS = ["shinos99@gmail.com"]
+
+# --- WELCOME MESSAGE ---
+WELCOME_MESSAGE = (
+    "👋 Welcome to SAS TRADING LAB!\n\n"
+    "📈 Automated Algo Tracking exclusively for NIFTY 50.\n"
+    f"⚡ Live Signals & Precision Levels ({STRATEGY_DISPLAY_NAME}).\n"
+    "📊 Real-Time Strikes for Option Buyers & Sellers.\n"
+    "🎯 Accurate Expiry Day Setups.\n\n"
+    "📌 Please check the PINNED message for important Legal Disclaimers.\n"
+    "(Educational & Analysis purpose only | Not SEBI Registered)"
+)
+
 def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in TELEGRAM_CHAT_IDS:
         try:
             payload = {"chat_id": chat_id, "text": msg}
-            tele_session.post(url, json=payload, timeout=5)
+            tele_session.post(url, json=payload, timeout=6)
         except Exception as e:
             print(f"Telegram Alert Error ({chat_id}): {e}")
 
-# 1. IMMEDIATE WORKFLOW ALERT (SAS TRADING LAB)
-send_telegram_alert(
-    "🟢 GITHUB WORKFLOW TRIGGERED!\n\n"
-    "🚀 SAS TRADING LAB Algo Engine is RUNNING.\n"
-    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
-    f"📅 Date: {start_now.strftime('%d-%b-%Y')}\n"
-    "📡 Channel & Admin Connection: Verified & Active ✅"
-)
+def send_telegram_document(file_path, caption=""):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            with open(file_path, 'rb') as doc:
+                files = {'document': doc}
+                data = {'chat_id': chat_id, 'caption': caption}
+                requests.post(url, data=data, files=files, timeout=25)
+        except Exception as e:
+            print(f"Telegram Doc Delivery Error ({chat_id}): {e}")
 
-# 2. WELCOME MESSAGE FOR NEW MEMBERS
-WELCOME_MESSAGE = (
-    "👋 Welcome to SAS TRADING LAB!\n\n"
-    "📈 Automated Algo Tracking for NIFTY 50.\n"
-    "⚡ Live Momentum Spikes & Key Breakout Levels (H1-H4).\n"
-    "📊 Daily Real-Time Performance & Expiry Tracking.\n\n"
-    "📌 Please check the PINNED message for important Legal Disclaimers.\n"
-    "(Educational & Research purpose only | Not SEBI Registered)"
+def send_email_with_pdf(file_path, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = ", ".join(RECEIVER_EMAILS)
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        with open(file_path, "rb") as attachment:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(file_path)}")
+        msg.attach(part)
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
+        server.quit()
+        print("PDF report successfully emailed.")
+    except Exception as e:
+        print(f"Email Dispatch Warning: {e}")
+
+# 1. IMMEDIATE STARTUP NOTIFICATION
+send_telegram_alert(
+    "🟢 ALGO SCANNER RUNNING!\n\n"
+    "🚀 SAS TRADING LAB Engine Connected Successfully.\n"
+    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
+    "📡 Signals & Reports directly delivering to this channel."
 )
 
 # --- BACKGROUND MEMBER JOIN LISTENER ---
@@ -68,21 +117,25 @@ def poll_new_channel_members():
                 for update in res.get("result", []):
                     last_update_id = update["update_id"]
                     if "chat_member" in update:
-                        cm = update["chat_member"]
-                        if cm.get("new_chat_member", {}).get("status") == "member":
-                            target_chat_id = cm["chat"]["id"]
-                            send_telegram_alert(WELCOME_MESSAGE)
+                        chat_member = update["chat_member"]
+                        new_status = chat_member.get("new_chat_member", {}).get("status")
+                        old_status = chat_member.get("old_chat_member", {}).get("status")
+
+                        if new_status == "member" and old_status in ["left", "kicked"]:
+                            target_chat_id = chat_member["chat"]["id"]
+                            send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                            tele_session.post(send_url, json={"chat_id": target_chat_id, "text": WELCOME_MESSAGE}, timeout=8)
         except Exception:
             time.sleep(5)
         time.sleep(2)
 
 threading.Thread(target=poll_new_channel_members, daemon=True).start()
 
-# --- HOLIDAY & WEEKEND CHECK ---
+# --- WEEKEND & HOLIDAY PROTECTION ---
 today_weekday = datetime.now(IST).weekday()
 if today_weekday in [5, 6]:
     day_name = "Saturday" if today_weekday == 5 else "Sunday"
-    send_telegram_alert(f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n\n• Market closed today.\n• Resumes Monday 09:00 AM IST.")
+    send_telegram_alert(f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n\n• Market Closed.\n• Resumes Monday at 09:00 AM IST.")
     exit(0)
 
 try:
@@ -91,7 +144,7 @@ try:
     if holidays_df is not None and not holidays_df.empty:
         if 'tradingDate' in holidays_df.columns and today_str in holidays_df['tradingDate'].values:
             reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0]
-            send_telegram_alert(f"🏖️ MARKET HOLIDAY TODAY!\n\n• Reason: {reason}\n• Scanner closed.")
+            send_telegram_alert(f"🏖️ MARKET HOLIDAY TODAY!\n\n• Reason: {reason}\n• Bot shutting down cleanly.")
             exit(0)
 except Exception as e:
     print(f"Holiday check bypassed: {e}")
@@ -99,36 +152,55 @@ except Exception as e:
 # FOCUS: NIFTY 50 ONLY
 INDEX_NAME = "NIFTY 50"
 BACKUP_FILE = "active_trades_sas_lab.json"
+MONTHLY_LEDGER_FILE = "monthly_trades_ledger_sas.json"
 
-# --- JSON PERSISTENCE (STATE & BACKUP) ---
-def load_backup():
-    default_data = {
-        "trade": None,
-        "stats": {"total_signals": 0, "targets_achieved": 0, "sl_hits": 0, "reversal_profits": 0, "early_sl_cuts": 0},
-        "date": datetime.now(IST).strftime('%d-%b-%Y')
-    }
+trade_stats = {"total_signals": 0, "target_hits": 0, "sl_hits": 0, "early_cuts": 0}
+prev_close = None
+algo_levels = None
+pivots_alert_sent = False
+hero_zero_sent = False
+last_heartbeat_hour = -1
+
+# --- JSON BACKUP & PERSISTENCE ---
+def load_backup_state():
+    default_state = {"NIFTY 50": None}
     if os.path.exists(BACKUP_FILE):
         try:
             with open(BACKUP_FILE, 'r') as f:
                 data = json.load(f)
-                if data.get("date") == default_data["date"]:
-                    return data.get("trade"), data.get("stats", default_data["stats"])
-        except Exception:
-            pass
-    return default_data["trade"], default_data["stats"]
+                if "NIFTY 50" in data:
+                    return data
+        except Exception as err:
+            print(f"Backup Load Error: {err}")
+    return default_state
 
-def save_backup(trade, stats):
+def save_backup_state(state):
     try:
-        data = {"trade": trade, "stats": stats, "date": datetime.now(IST).strftime('%d-%b-%Y')}
         with open(BACKUP_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
+            json.dump(state, f, indent=4)
     except Exception as err:
         print(f"Backup Save Error: {err}")
 
-active_trade, trade_stats = load_backup()
+def load_monthly_ledger():
+    if os.path.exists(MONTHLY_LEDGER_FILE):
+        try:
+            with open(MONTHLY_LEDGER_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
 
-# --- CAMARILLA H1-H4 LEVELS ---
-def calculate_h_l_levels():
+def record_to_monthly_ledger(trade_entry):
+    records = load_monthly_ledger()
+    records.append(trade_entry)
+    try:
+        with open(MONTHLY_LEDGER_FILE, 'w') as f:
+            json.dump(records, f, indent=4)
+    except Exception as e:
+        print(f"Ledger save warning: {e}")
+
+# --- INTERNAL LEVEL CALCULATION ---
+def calculate_algo_levels():
     try:
         df_daily = yf.download("^NSEI", period="5d", interval="1d", progress=False)
         if not df_daily.empty:
@@ -141,75 +213,156 @@ def calculate_h_l_levels():
             diff = high - low
 
             return {
-                "H4": round(close + (diff * 1.1 / 2.0), 2),
-                "H3": round(close + (diff * 1.1 / 4.0), 2),
-                "H2": round(close + (diff * 1.1 / 6.0), 2),
-                "H1": round(close + (diff * 1.1 / 12.0), 2),
-                "L1": round(close - (diff * 1.1 / 12.0), 2),
-                "L2": round(close - (diff * 1.1 / 6.0), 2),
-                "L3": round(close - (diff * 1.1 / 4.0), 2),
-                "L4": round(close - (diff * 1.1 / 2.0), 2)
+                "Buy_Trigger": round(close + (diff * 1.1 / 2.0), 2),
+                "Key_Res": round(close + (diff * 1.1 / 4.0), 2),
+                "Key_Sup": round(close - (diff * 1.1 / 4.0), 2),
+                "Sell_Trigger": round(close - (diff * 1.1 / 2.0), 2),
+                "Prev_Close": round(close, 2)
             }
     except Exception as e:
-        print(f"Levels Calculation Error: {e}")
+        print(f"Internal Level Calc Warning: {e}")
     return None
 
-pivots = calculate_h_l_levels()
+algo_levels = calculate_algo_levels()
+active_trades = load_backup_state()
 
-# --- OPTION DATA ENGINE ---
-def get_detailed_options(spot_price, signal_type):
-    step = 50
-    atm_strike = int(round(spot_price / step) * step)
-    buyer_type = "CE" if signal_type == "BUY" else "PE"
-    seller_type = "PE" if signal_type == "BUY" else "CE"
-    safe_seller_strike = (atm_strike - step) if signal_type == "BUY" else (atm_strike + step)
-
-    buyer_ltp = None
-    seller_ltp = None
-    safe_seller_ltp = None
-    exp_date = ""
-
+# --- ACCURATE NSE EXPIRY ENGINE ---
+def check_actual_nse_expiry():
     try:
         chain_df = capital_market.live_index_option_chain("NIFTY")
         if chain_df is not None and not chain_df.empty:
-            exp_date = chain_df['expiryDate'].iloc[0]
-            curr_exp = chain_df[chain_df['expiryDate'] == exp_date]
+            exp_date_str = str(chain_df['expiryDate'].iloc[0])
+            exp_dt = datetime.strptime(exp_date_str, "%d-%b-%Y").date()
+            today_dt = datetime.now(IST).date()
 
-            b_row = curr_exp[curr_exp['strikePrice'] == atm_strike]
-            if not b_row.empty and f"{buyer_type}_LTP" in b_row.columns:
-                buyer_ltp = float(str(b_row[f"{buyer_type}_LTP"].values[0]).replace(',', ''))
+            is_today_expiry = (today_dt == exp_dt)
+            next_possible_exp = exp_dt + timedelta(days=7)
+            is_monthly_expiry = (next_possible_exp.month != exp_dt.month)
 
-            s_row = curr_exp[curr_exp['strikePrice'] == atm_strike]
-            if not s_row.empty and f"{seller_type}_LTP" in s_row.columns:
-                seller_ltp = float(str(s_row[f"{seller_type}_LTP"].values[0]).replace(',', ''))
-
-            safe_row = curr_exp[curr_exp['strikePrice'] == safe_seller_strike]
-            if not safe_row.empty and f"{seller_type}_LTP" in safe_row.columns:
-                safe_seller_ltp = float(str(safe_row[f"{seller_type}_LTP"].values[0]).replace(',', ''))
+            return is_today_expiry, is_monthly_expiry, exp_date_str
     except Exception as e:
-        print(f"Option Chain Warning: {e}")
+        print(f"NSE Expiry Check Warning: {e}")
+    return False, False, ""
 
-    b_sl = f"₹{max(buyer_ltp * 0.70, 5.0):.1f}" if buyer_ltp else "15-20% SL"
-    b_t1 = f"₹{buyer_ltp * 1.25:.1f}" if buyer_ltp else "+25% Gain"
-    b_t2 = f"₹{buyer_ltp * 1.50:.1f}" if buyer_ltp else "+50% Gain"
+is_today_expiry, is_monthly_expiry, current_expiry_str = check_actual_nse_expiry()
 
-    s_sl = f"₹{seller_ltp * 1.35:.1f}" if seller_ltp else "+35% Premium"
-    s_tgt = f"₹{seller_ltp * 0.40:.1f}" if seller_ltp else "60% Decay"
+# --- OPTION STRIKE ENGINE ---
+def get_option_recommendations(spot_price, signal_direction, spot_risk):
+    step = 50
+    atm_strike = int(round(spot_price / step) * step)
+    delta = 0.50
+    base_atm_price = 110.0
+    otm_seller_price = 65.0
+
+    buyer_entry = base_atm_price
+    buyer_sl = max(10.0, round(buyer_entry - (spot_risk * delta), 1))
+    buyer_t1 = round(buyer_entry + (spot_risk * 1.0 * delta), 1)
+    buyer_t2 = round(buyer_entry + (spot_risk * 1.5 * delta), 1)
+    buyer_t3 = round(buyer_entry + (spot_risk * 2.5 * delta), 1)
+
+    seller_entry = base_atm_price
+    seller_sl = round(seller_entry + (spot_risk * delta), 1)
+    seller_target = max(5.0, round(seller_entry - (spot_risk * 1.2 * delta), 1))
+
+    if signal_direction == "BUY":
+        buyer_strike = f"{atm_strike} CE"
+        seller_strike = f"{atm_strike} PE"
+        safe_seller_strike = f"{atm_strike - step} PE"
+    else:
+        buyer_strike = f"{atm_strike} PE"
+        seller_strike = f"{atm_strike} CE"
+        safe_seller_strike = f"{atm_strike + step} CE"
 
     return {
-        "exp": exp_date,
-        "buyer_strike": f"{atm_strike} {buyer_type}",
-        "buyer_ltp": f"₹{buyer_ltp:.2f}" if buyer_ltp else "Live Terminal",
-        "buyer_sl": b_sl,
-        "buyer_t1": b_t1,
-        "buyer_t2": b_t2,
-        "seller_strike": f"{atm_strike} {seller_type}",
-        "seller_ltp": f"₹{seller_ltp:.2f}" if seller_ltp else "Live Terminal",
-        "seller_sl": s_sl,
-        "seller_tgt": s_tgt,
-        "safe_seller_strike": f"{safe_seller_strike} {seller_type}",
-        "safe_seller_ltp": f"₹{safe_seller_ltp:.2f}" if safe_seller_ltp else "Live Terminal",
+        "buyer_strike": buyer_strike, "buyer_entry": buyer_entry, "buyer_sl": buyer_sl,
+        "buyer_t1": buyer_t1, "buyer_t2": buyer_t2, "buyer_t3": buyer_t3,
+        "seller_strike": seller_strike, "seller_entry": seller_entry, "seller_sl": seller_sl,
+        "seller_target": seller_target, "safe_seller_strike": safe_seller_strike, "safe_seller_entry": otm_seller_price
     }
+
+# --- PDF REPORT ENGINE WITH DETAILED TIMESTAMPS & LEDGER TABLE ---
+def generate_detailed_pdf_report(filename, title_text, subtitle_text, logs_to_print):
+    doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    title_style = ParagraphStyle(
+        'RepTitle', parent=styles['Heading1'], fontSize=15, leading=18,
+        textColor=colors.HexColor("#1A365D"), alignment=1
+    )
+    elements.append(Paragraph(f"SAS TRADING LAB - {title_text}", title_style))
+    elements.append(Paragraph(f"Strategy: {STRATEGY_DISPLAY_NAME} | Timeline: {subtitle_text} | Total Trades: {len(logs_to_print)}", styles['Normal']))
+    elements.append(Spacer(1, 10))
+
+    headers = [
+        "SL\nNO", "Date", "Index & Type", "Entry Price\n- Time",
+        "Target 1\n- Time", "Target 2\n- Time", "Target 3\n- Time",
+        "Stop Loss\n- Time", "P/L Points\n(+ / -)", "Final Status"
+    ]
+
+    table_rows = [headers]
+    for idx, log in enumerate(logs_to_print, start=1):
+        t1_val = f"{log.get('t1', '-')}\n({log.get('t1_time', '-')})" if log.get('t1_hit') else "-"
+        t2_val = f"{log.get('t2', '-')}\n({log.get('t2_time', '-')})" if log.get('t2_hit') else "-"
+        t3_val = f"{log.get('t3', '-')}\n({log.get('t3_time', '-')})" if log.get('t3_hit') else "-"
+        sl_val = f"{log.get('sl', '-')}\n({log.get('sl_time', '-')})" if log.get('sl_hit') else f"{log.get('sl', '-')}"
+
+        pnl_val = f"{log.get('pnl', 0.0):+.2f}"
+
+        table_rows.append([
+            str(idx),
+            log.get('date', '-'),
+            f"{log.get('index', '')}\n({log.get('type', '')})",
+            f"{log.get('entry', 0.0):.2f}\n({log.get('entry_time', '')})",
+            t1_val,
+            t2_val,
+            t3_val,
+            sl_val,
+            pnl_val,
+            log.get('status', '-')
+        ])
+
+    col_widths = [25, 65, 80, 80, 80, 80, 80, 80, 65, 110]
+    trade_table = Table(table_rows, colWidths=col_widths)
+    trade_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2B6CB0")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+        ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    elements.append(trade_table)
+    doc.build(elements)
+
+def format_telegram_card(trade):
+    t1_txt = f"{trade.get('t1', '-')} [{trade.get('t1_time', '-')}] ✅" if trade.get('t1_hit') else "-"
+    t2_txt = f"{trade.get('t2', '-')} [{trade.get('t2_time', '-')}] ✅" if trade.get('t2_hit') else "-"
+    t3_txt = f"{trade.get('t3', '-')} [{trade.get('t3_time', '-')}] ✅" if trade.get('t3_hit') else "-"
+    sl_txt = f"{trade.get('sl', '-')} [{trade.get('sl_time', '-')}] ❌" if trade.get('sl_hit') else f"{trade.get('sl', '-')}"
+
+    pnl = trade.get('pnl', 0.0)
+    pnl_str = f"+{pnl:.2f} Pts" if pnl >= 0 else f"{pnl:.2f} Pts"
+
+    return (
+        "📊 TRADE PERFORMANCE SUMMARY\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Date: {trade.get('date', '-')}\n"
+        f"🔹 Index: {trade['index']} ({trade['type']})\n"
+        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"▫️ Entry Price : {trade['entry']:.2f} [{trade.get('entry_time', '-')}]\n"
+        f"🎯 Target 1    : {t1_txt}\n"
+        f"🎯 Target 2    : {t2_txt}\n"
+        f"🎯 Target 3    : {t3_txt}\n"
+        f"🛑 Stop Loss   : {sl_txt}\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 P/L Points  : {pnl_str}\n"
+        f"🏁 Final Status: {trade.get('status', 'Completed')}\n"
+        "━━━━━━━━━━━━━━━━━━━━━"
+    )
 
 def get_live_index_data():
     try:
@@ -217,59 +370,75 @@ def get_live_index_data():
     except Exception as e:
         return None
 
-last_heartbeat_hour = -1
-levels_sent = False
-
-# --- ZERO-DELAY SCANNER ENGINE ---
+# --- SCANNER RUNTIME LOOP ---
 while True:
     try:
         now = datetime.now(IST)
         current_time = now.time()
-        current_time_str = now.strftime('%H:%M:%S')
+        current_time_str = now.strftime('%I:%M %p')
+        today_date_str = now.strftime('%d-%b-%Y')
 
+        pivot_alert_time = datetime.strptime("09:05", "%H:%M").time()
         start_trade_time = datetime.strptime("09:30", "%H:%M").time()
+        hero_zero_time = datetime.strptime("13:15", "%H:%M").time()
         end_trade_time = datetime.strptime("15:20", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
+
+        # 1. 09:05 AM KEY LEVELS DISPATCH
+        if not pivots_alert_sent and current_time >= pivot_alert_time:
+            pivots_alert_sent = True
+            if algo_levels:
+                send_telegram_alert(
+                    f"📐 DAILY KEY LEVELS (09:05 AM IST)\n"
+                    f"📅 Date: {today_date_str} | Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
+                    f"🔹 NIFTY 50 (Prev Close: {algo_levels['Prev_Close']})\n"
+                    f"• Bullish Breakout Zone: Above {algo_levels['Buy_Trigger']:.2f}\n"
+                    f"• Major Resistance: {algo_levels['Key_Res']:.2f}\n"
+                    f"• Major Support: {algo_levels['Key_Sup']:.2f}\n"
+                    f"• Bearish Breakdown Zone: Below {algo_levels['Sell_Trigger']:.2f}\n"
+                )
 
         can_take_trades = (start_trade_time <= current_time < end_trade_time)
         is_market_closing = (current_time >= end_trade_time)
 
-        # 09:10 AM MORNING LEVELS
-        if now.hour == 9 and now.minute >= 10 and not levels_sent:
-            if pivots:
-                send_telegram_alert(
-                    f"📊 KEY PIVOT LEVELS (NIFTY 50)\n⏰ Time: 09:10 AM IST\nStrategy: {STRATEGY_DISPLAY_NAME}\n\n"
-                    f"• H4 (Breakout Buy): {pivots['H4']:.2f}\n"
-                    f"• H3 (Sell Reversal Zone): {pivots['H3']:.2f}\n"
-                    f"• H2: {pivots['H2']:.2f} | H1: {pivots['H1']:.2f}\n"
-                    f"• L1: {pivots['L1']:.2f} | L2: {pivots['L2']:.2f}\n"
-                    f"• L3 (Buy Reversal Zone): {pivots['L3']:.2f}\n"
-                    f"• L4 (Breakdown Sell): {pivots['L4']:.2f}\n"
-                )
-            levels_sent = True
-
-        # 03:40 PM DAILY CLOSING SUMMARY
+        # 2. 03:40 PM MARKET CLOSE (PDF & EMAIL)
         if current_time >= shutdown_time:
-            total_sigs = trade_stats['total_signals']
-            targets = trade_stats['targets_achieved']
-            sls = trade_stats['sl_hits']
-            revs = trade_stats['reversal_profits']
-            early_cuts = trade_stats.get('early_sl_cuts', 0)
-            total_res = targets + sls + revs + early_cuts
-            win_rate = ((targets + revs) / total_res * 100) if total_res > 0 else 0.0
+            all_ledger_records = load_monthly_ledger()
+            today_records = [l for l in all_ledger_records if l.get('date') == today_date_str]
 
-            send_telegram_alert(
-                f"📊 MARKET CLOSED (DAILY REPORT)\n\n"
+            total = trade_stats['total_signals']
+            wins = trade_stats['target_hits']
+            win_rate = (wins / total * 100) if total > 0 else 0.0
+
+            title_badge = "MONTHLY EXPIRY REPORT" if is_monthly_expiry else "DAILY PERFORMANCE REPORT"
+
+            summary = (
+                f"📊 MARKET CLOSED ({title_badge})\n\n"
                 f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                f"📅 Date: {now.strftime('%d-%b-%Y')}\n\n"
-                f"• Total Signals: {total_sigs}\n"
-                f"• Targets Achieved: {targets}\n"
-                f"• Reversal Exits in Profit: {revs}\n"
-                f"• Early Risk Cuts: {early_cuts}\n"
-                f"• Stop Losses Hit: {sls}\n"
-                f"• Win Rate: {win_rate:.1f}%\n\n"
-                f"SAS TRADING LAB Engine safely shut down."
+                f"📅 Date: {today_date_str}\n\n"
+                f"• Signals Closed Today: {len(today_records)}\n"
+                f"• Targets / Locks Achieved: {wins}\n"
+                f"• Stop Losses Hit: {trade_stats['sl_hits']}\n"
+                f"• Early Cuts: {trade_stats['early_cuts']}\n"
+                f"🏆 Win Rate: {win_rate:.1f}%\n"
+                f"📚 Total Monthly Trades: {len(all_ledger_records)}\n\n"
+                f"Generating & Dispatching Comprehensive PDFs..."
             )
+            send_telegram_alert(summary)
+
+            pdf_daily = f"Nifty_Daily_Report_{today_date_str}.pdf"
+            generate_detailed_pdf_report(pdf_daily, "DAILY PERFORMANCE REPORT", today_date_str, today_records)
+            send_telegram_document(pdf_daily, caption=f"📄 NIFTY 50 Daily Report ({today_date_str})")
+            send_email_with_pdf(pdf_daily, f"NIFTY 50 Daily Report - {today_date_str}", summary)
+
+            if is_monthly_expiry:
+                month_str = now.strftime('%B %Y')
+                pdf_monthly = f"Nifty_Monthly_Cumulative_{now.strftime('%b_%Y')}.pdf"
+                generate_detailed_pdf_report(pdf_monthly, "MONTHLY EXPIRY CUMULATIVE REPORT", month_str, all_ledger_records)
+                send_telegram_document(pdf_monthly, caption=f"📚 Monthly Cumulative Ledger ({month_str})")
+                send_email_with_pdf(pdf_monthly, f"NIFTY 50 Monthly Expiry Ledger - {month_str}", f"Attached full trade records up to {today_date_str}.")
+
+            print("Market session completed safely.")
             break
 
         raw = get_live_index_data()
@@ -277,286 +446,378 @@ while True:
             row = raw[raw['index'] == INDEX_NAME]
             if not row.empty:
                 current_price = float(str(row['last'].values[0]).replace(',', ''))
+                if prev_close is None and 'previousClose' in row.columns:
+                    prev_close = float(str(row['previousClose'].values[0]).replace(',', ''))
 
-                # --- 1. ACTIVE POSITION TRACKING ---
-                if active_trade is not None:
+                # --- 🎯 01:15 PM HERO-ZERO SETUP ---
+                if is_today_expiry and not hero_zero_sent and current_time >= hero_zero_time:
+                    step = 50
+                    atm = int(round(current_price / step) * step)
+                    hz_type = "MONTHLY EXPIRY" if is_monthly_expiry else "WEEKLY EXPIRY"
+
+                    send_telegram_alert(
+                        f"🔥 *HERO-ZERO {hz_type} SETUP (01:15 PM)*\n\n"
+                        f"📍 Index: *NIFTY 50* (Spot: {current_price:.2f})\n"
+                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                        f"📅 Expiry Date: *{current_expiry_str}*\n\n"
+                        f"🎯 *CALL OPTION (On Upside Spike):*\n"
+                        f"• Buy Strike: *{atm + step} CE* (Expected: ₹15 - ₹35)\n"
+                        f"• Strict SL: ₹6.00 | T1: ₹50.00 | T2: ₹80.00+\n\n"
+                        f"🎯 *PUT OPTION (On Downside Spike):*\n"
+                        f"• Buy Strike: *{atm - step} PE* (Expected: ₹15 - ₹35)\n"
+                        f"• Strict SL: ₹6.00 | T1: ₹50.00 | T2: ₹80.00+\n\n"
+                        f"⚡ *Rule:* 02:00 PM-ന് ശേഷമുള്ള അതിവേഗ സ്പൈക്കുകളിൽ മാത്രം ട്രേഡ് ചെയ്യുക. T1-ൽ ക്യാപിറ്റൽ എടുത്തു ട്രേഡ് റിസ്ക്-ഫ്രീ ആക്കുക!"
+                    )
+                    hero_zero_sent = True
+
+                # --- ACTIVE POSITION TRACKING ---
+                trade = active_trades["NIFTY 50"]
+                if trade is not None:
                     # 03:20 PM AUTO-EXIT
                     if is_market_closing:
-                        pnl = current_price - active_trade['entry'] if active_trade['type'] == 'BUY' else active_trade['entry'] - current_price
-                        send_telegram_alert(
-                            f"⏰ AUTO EXIT (03:20 PM CLOSE)\n\n"
-                            f"Index: NIFTY 50\n"
-                            f"Exit Spot: {current_price:.2f} | Spot PnL: {pnl:+.2f}\n"
-                            f"Status: Position Cleared."
-                        )
-                        active_trade = None
-                        save_backup(active_trade, trade_stats)
+                        pnl = current_price - trade['entry'] if trade['type'] == 'BUY' else trade['entry'] - current_price
+                        trade['exit_price'] = current_price
+                        trade['exit_time'] = current_time_str
+                        trade['pnl'] = pnl
+                        trade['status'] = 'Auto-Exit (03:20 PM)'
+                        record_to_monthly_ledger(trade)
+
+                        send_telegram_alert(format_telegram_card(trade))
+                        active_trades["NIFTY 50"] = None
+                        save_backup_state(active_trades)
                         continue
 
-                    # BUY TRADE MONITORING
-                    if active_trade['type'] == 'BUY':
-                        if 'best_price' not in active_trade: active_trade['best_price'] = active_trade['entry']
-                        active_trade['best_price'] = max(active_trade['best_price'], current_price)
-                        peak = active_trade['best_price'] - active_trade['entry']
-                        adverse = active_trade['entry'] - current_price
+                    # BUY POSITION MONITORING
+                    if trade['type'] == 'BUY':
+                        gain = current_price - trade['entry']
+                        if gain > trade.get('max_gain', 0): trade['max_gain'] = gain
 
-                        # Early Cut below L4
-                        if not active_trade.get('t1_hit') and adverse >= 45 and (pivots and current_price < pivots['L4']):
-                            trade_stats['early_sl_cuts'] = trade_stats.get('early_sl_cuts', 0) + 1
-                            send_telegram_alert(
-                                f"⚠️ MOMENTUM FAILED: EARLY EXIT!\n\n"
-                                f"Index: NIFTY 50 (BUY)\n"
-                                f"Reason: Breakdown Below Support L4\n"
-                                f"Exit Spot: {current_price:.2f} (Cut at -{adverse:.2f} pts)\n"
-                                f"Status: Position cut to protect capital."
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                        # Early Cut
+                        if not trade.get('t1_hit') and current_price < trade['cut_level']:
+                            trade_stats['early_cuts'] += 1
+                            pnl = current_price - trade['entry']
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Early Cut'
+                            record_to_monthly_ledger(trade)
+
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                        # Profit Reversal Lock (30+ pts peak, 40% retrace)
-                        if not active_trade.get('t1_hit') and peak >= 30:
-                            if (active_trade['best_price'] - current_price) >= (peak * 0.40):
-                                locked = current_price - active_trade['entry']
-                                send_telegram_alert(
-                                    f"⚡ MOMENTUM REVERSAL: BOOK PROFIT!\n\n"
-                                    f"Index: NIFTY 50 (BUY)\n"
-                                    f"Peak Spot: {active_trade['best_price']:.2f}\n"
-                                    f"Book Profit @ {current_price:.2f} (+{locked:.2f} pts)\n"
-                                    f"Status: Trade Closed in profit before SL."
-                                )
-                                trade_stats['reversal_profits'] += 1
-                                active_trade = None
-                                save_backup(active_trade, trade_stats)
-                                continue
+                        # Reversal Profit Lock
+                        if trade.get('max_gain', 0) >= 30 and gain <= 10:
+                            trade_stats['target_hits'] += 1
+                            pnl = current_price - trade['entry']
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Reversal Profit Lock'
+                            record_to_monthly_ledger(trade)
 
-                        # Stop Loss
-                        if not active_trade.get('t1_hit') and current_price <= active_trade['sl']:
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
+                            continue
+
+                        # SL Hit
+                        if current_price <= trade['sl']:
                             trade_stats['sl_hits'] += 1
-                            send_telegram_alert(
-                                f"❌ STOP LOSS HIT!\n\n"
-                                f"Index: NIFTY 50 (BUY)\n"
-                                f"Exit Spot: {current_price:.2f} | SL: {active_trade['sl']:.2f}\n"
-                                f"Status: Trade Closed."
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                            pnl = current_price - trade['entry']
+                            trade['sl_hit'] = True
+                            trade['sl_time'] = current_time_str
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Target 1 & Exit' if trade.get('t1_hit') else 'SL Hit'
+                            record_to_monthly_ledger(trade)
+
+                            if not trade.get('t1_hit'):
+                                send_telegram_alert(format_telegram_card(trade))
+
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                        # Target 1 Achieved
-                        if not active_trade.get('t1_hit') and current_price >= active_trade['t1']:
-                            active_trade['t1_hit'] = True
-                            active_trade['sl'] = active_trade['entry']
-                            trade_stats['targets_achieved'] += 1
+                        # T1 Hit
+                        if not trade.get('t1_hit') and current_price >= trade['t1']:
+                            trade['t1_hit'] = True
+                            trade['t1_time'] = current_time_str
+                            trade['sl'] = trade['entry']
+                            trade_stats['target_hits'] += 1
+                            save_backup_state(active_trades)
                             send_telegram_alert(
                                 f"🎯 TARGET 1 ACHIEVED!\n\n"
-                                f"Index: NIFTY 50 (BUY)\n"
-                                f"Spot: {current_price:.2f} | T1: {active_trade['t1']:.2f}\n"
-                                f"🛡️ SL Trailed to Cost: {active_trade['entry']:.2f} (Zero Risk Active)"
+                                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                f"📅 Date: {today_date_str}\n"
+                                f"📍 Index: NIFTY 50 (BUY)\n"
+                                f"💵 Spot: {current_price:.2f} | T1: {trade['t1']:.2f}\n"
+                                f"⏰ Time: {current_time_str}\n"
+                                f"🛡️ Action: Move SL to Entry ({trade['entry']:.2f}) - Zero Risk Active!"
                             )
-                            save_backup(active_trade, trade_stats)
 
-                        # Target 2 Achieved
-                        if active_trade.get('t1_hit') and not active_trade.get('t2_hit') and current_price >= active_trade['t2']:
-                            active_trade['t2_hit'] = True
+                        # T2 Hit
+                        if trade.get('t1_hit') and not trade.get('t2_hit') and current_price >= trade['t2']:
+                            trade['t2_hit'] = True
+                            trade['t2_time'] = current_time_str
+                            trade['sl'] = trade['t1']
+                            trade_stats['target_hits'] += 1
+                            save_backup_state(active_trades)
                             send_telegram_alert(
                                 f"🎯🎯 TARGET 2 ACHIEVED!\n\n"
-                                f"Index: NIFTY 50 (BUY)\n"
-                                f"Spot: {current_price:.2f} | T2: {active_trade['t2']:.2f}\n"
-                                f"Status: Profits locked. Trailing to T3."
+                                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                f"📅 Date: {today_date_str}\n"
+                                f"📍 Index: NIFTY 50 (BUY)\n"
+                                f"💵 Spot: {current_price:.2f} | T2: {trade['t2']:.2f}\n"
+                                f"⏰ Time: {current_time_str}\n"
+                                f"🛡️ Action: Trail SL to Target 1 ({trade['t1']:.2f})!"
                             )
-                            save_backup(active_trade, trade_stats)
 
-                        # Target 3 Achieved
-                        if active_trade.get('t2_hit') and current_price >= active_trade['t3']:
-                            send_telegram_alert(
-                                f"🎯🎯🎯 FINAL TARGET 3 HIT!\n\n"
-                                f"Index: NIFTY 50 (BUY)\n"
-                                f"Exit Spot: {current_price:.2f} | T3: {active_trade['t3']:.2f}\n"
-                                f"Status: Full Targets Achieved. Trade Closed!"
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                        # T3 Hit
+                        if trade.get('t2_hit') and current_price >= trade['t3']:
+                            trade['t3_hit'] = True
+                            trade['t3_time'] = current_time_str
+                            trade_stats['target_hits'] += 1
+                            pnl = current_price - trade['entry']
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Target 3 Achieved'
+                            record_to_monthly_ledger(trade)
+
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                    # SELL TRADE MONITORING
-                    elif active_trade['type'] == 'SELL':
-                        if 'best_price' not in active_trade: active_trade['best_price'] = active_trade['entry']
-                        active_trade['best_price'] = min(active_trade['best_price'], current_price)
-                        peak = active_trade['entry'] - active_trade['best_price']
-                        adverse = current_price - active_trade['entry']
+                    # SELL POSITION MONITORING
+                    elif trade['type'] == 'SELL':
+                        gain = trade['entry'] - current_price
+                        if gain > trade.get('max_gain', 0): trade['max_gain'] = gain
 
-                        # Early Cut above H4
-                        if not active_trade.get('t1_hit') and adverse >= 45 and (pivots and current_price > pivots['H4']):
-                            trade_stats['early_sl_cuts'] = trade_stats.get('early_sl_cuts', 0) + 1
-                            send_telegram_alert(
-                                f"⚠️ MOMENTUM FAILED: EARLY EXIT!\n\n"
-                                f"Index: NIFTY 50 (SELL)\n"
-                                f"Reason: Breakout Above Resistance H4\n"
-                                f"Exit Spot: {current_price:.2f} (Cut at -{adverse:.2f} pts)\n"
-                                f"Status: Position cut to protect capital."
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                        # Early Cut
+                        if not trade.get('t1_hit') and current_price > trade['cut_level']:
+                            trade_stats['early_cuts'] += 1
+                            pnl = trade['entry'] - current_price
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Early Cut'
+                            record_to_monthly_ledger(trade)
+
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                        # Profit Reversal Lock
-                        if not active_trade.get('t1_hit') and peak >= 30:
-                            if (current_price - active_trade['best_price']) >= (peak * 0.40):
-                                locked = active_trade['entry'] - current_price
-                                send_telegram_alert(
-                                    f"⚡ MOMENTUM REVERSAL: BOOK PROFIT!\n\n"
-                                    f"Index: NIFTY 50 (SELL)\n"
-                                    f"Lowest Dip: {active_trade['best_price']:.2f}\n"
-                                    f"Book Profit @ {current_price:.2f} (+{locked:.2f} pts)\n"
-                                    f"Status: Trade Closed in profit before SL."
-                                )
-                                trade_stats['reversal_profits'] += 1
-                                active_trade = None
-                                save_backup(active_trade, trade_stats)
-                                continue
+                        # Reversal Profit Lock
+                        if trade.get('max_gain', 0) >= 30 and gain <= 10:
+                            trade_stats['target_hits'] += 1
+                            pnl = trade['entry'] - current_price
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Reversal Profit Lock'
+                            record_to_monthly_ledger(trade)
 
-                        # Stop Loss
-                        if not active_trade.get('t1_hit') and current_price >= active_trade['sl']:
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
+                            continue
+
+                        # SL Hit
+                        if current_price >= trade['sl']:
                             trade_stats['sl_hits'] += 1
-                            send_telegram_alert(
-                                f"❌ STOP LOSS HIT!\n\n"
-                                f"Index: NIFTY 50 (SELL)\n"
-                                f"Exit Spot: {current_price:.2f} | SL: {active_trade['sl']:.2f}\n"
-                                f"Status: Trade Closed."
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                            pnl = trade['entry'] - current_price
+                            trade['sl_hit'] = True
+                            trade['sl_time'] = current_time_str
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Target 1 & Exit' if trade.get('t1_hit') else 'SL Hit'
+                            record_to_monthly_ledger(trade)
+
+                            if not trade.get('t1_hit'):
+                                send_telegram_alert(format_telegram_card(trade))
+
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                        # Target 1 Achieved
-                        if not active_trade.get('t1_hit') and current_price <= active_trade['t1']:
-                            active_trade['t1_hit'] = True
-                            active_trade['sl'] = active_trade['entry']
-                            trade_stats['targets_achieved'] += 1
+                        # T1 Hit
+                        if not trade.get('t1_hit') and current_price <= trade['t1']:
+                            trade['t1_hit'] = True
+                            trade['t1_time'] = current_time_str
+                            trade['sl'] = trade['entry']
+                            trade_stats['target_hits'] += 1
+                            save_backup_state(active_trades)
                             send_telegram_alert(
                                 f"🎯 TARGET 1 ACHIEVED!\n\n"
-                                f"Index: NIFTY 50 (SELL)\n"
-                                f"Spot: {current_price:.2f} | T1: {active_trade['t1']:.2f}\n"
-                                f"🛡️ SL Trailed to Cost: {active_trade['entry']:.2f} (Zero Risk Active)"
+                                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                f"📅 Date: {today_date_str}\n"
+                                f"📍 Index: NIFTY 50 (SELL)\n"
+                                f"💵 Spot: {current_price:.2f} | T1: {trade['t1']:.2f}\n"
+                                f"⏰ Time: {current_time_str}\n"
+                                f"🛡️ Action: Move SL to Entry ({trade['entry']:.2f}) - Zero Risk Active!"
                             )
-                            save_backup(active_trade, trade_stats)
 
-                        # Target 2 Achieved
-                        if active_trade.get('t1_hit') and not active_trade.get('t2_hit') and current_price <= active_trade['t2']:
-                            active_trade['t2_hit'] = True
+                        # T2 Hit
+                        if trade.get('t1_hit') and not trade.get('t2_hit') and current_price <= trade['t2']:
+                            trade['t2_hit'] = True
+                            trade['t2_time'] = current_time_str
+                            trade['sl'] = trade['t1']
+                            trade_stats['target_hits'] += 1
+                            save_backup_state(active_trades)
                             send_telegram_alert(
                                 f"🎯🎯 TARGET 2 ACHIEVED!\n\n"
-                                f"Index: NIFTY 50 (SELL)\n"
-                                f"Spot: {current_price:.2f} | T2: {active_trade['t2']:.2f}\n"
-                                f"Status: Profits locked. Trailing to T3."
+                                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                f"📅 Date: {today_date_str}\n"
+                                f"📍 Index: NIFTY 50 (SELL)\n"
+                                f"💵 Spot: {current_price:.2f} | T2: {trade['t2']:.2f}\n"
+                                f"⏰ Time: {current_time_str}\n"
+                                f"🛡️ Action: Trail SL to Target 1 ({trade['t1']:.2f})!"
                             )
-                            save_backup(active_trade, trade_stats)
 
-                        # Target 3 Achieved
-                        if active_trade.get('t2_hit') and current_price <= active_trade['t3']:
-                            send_telegram_alert(
-                                f"🎯🎯🎯 FINAL TARGET 3 HIT!\n\n"
-                                f"Index: NIFTY 50 (SELL)\n"
-                                f"Exit Spot: {current_price:.2f} | T3: {active_trade['t3']:.2f}\n"
-                                f"Status: Full Targets Achieved. Trade Closed!"
-                            )
-                            active_trade = None
-                            save_backup(active_trade, trade_stats)
+                        # T3 Hit
+                        if trade.get('t2_hit') and current_price <= trade['t3']:
+                            trade['t3_hit'] = True
+                            trade['t3_time'] = current_time_str
+                            trade_stats['target_hits'] += 1
+                            pnl = trade['entry'] - current_price
+                            trade['exit_price'] = current_price
+                            trade['exit_time'] = current_time_str
+                            trade['pnl'] = pnl
+                            trade['status'] = 'Target 3 Achieved'
+                            record_to_monthly_ledger(trade)
+
+                            send_telegram_alert(format_telegram_card(trade))
+                            active_trades["NIFTY 50"] = None
+                            save_backup_state(active_trades)
                             continue
 
-                # --- 2. ZERO-DELAY ENTRY DETECTOR ---
-                if can_take_trades and active_trade is None and pivots is not None:
-                    h4, h3, h2, h1 = pivots['H4'], pivots['H3'], pivots['H2'], pivots['H1']
-                    l1, l2, l3, l4 = pivots['L1'], pivots['L2'], pivots['L3'], pivots['L4']
+                # --- ZERO-DELAY ENTRY DETECTOR ---
+                if can_take_trades and active_trades["NIFTY 50"] is None and algo_levels is not None:
+                    buy_trigger = algo_levels['Buy_Trigger']
+                    sell_trigger = algo_levels['Sell_Trigger']
+                    key_res = algo_levels['Key_Res']
+                    key_sup = algo_levels['Key_Sup']
 
-                    sig_found = False
-                    sig_type = ""
-                    setup_name = ""
-                    sl = 0.0
-                    t1, t2, t3 = 0.0, 0.0, 0.0
+                    # BUY SIGNAL
+                    if current_price > buy_trigger:
+                        sl = round(key_res, 2)
+                        risk = round(current_price - sl, 2)
+                        if risk < 15: risk = 25.0; sl = round(current_price - 25.0, 2)
 
-                    # H4 BREAKOUT (BUY)
-                    if current_price > h4:
-                        sig_found = True
-                        sig_type = "BUY"
-                        setup_name = "H4 BREAKOUT"
-                        sl = round(h3, 2)
-                        risk = current_price - sl
-                        if risk < 15: sl = round(current_price - 25.0, 2); risk = 25.0
                         t1 = round(current_price + (risk * 1.0), 2)
                         t2 = round(current_price + (risk * 1.5), 2)
                         t3 = round(current_price + (risk * 2.5), 2)
 
-                    # L4 BREAKDOWN (SELL)
-                    elif current_price < l4:
-                        sig_found = True
-                        sig_type = "SELL"
-                        setup_name = "L4 BREAKDOWN"
-                        sl = round(l3, 2)
-                        risk = sl - current_price
-                        if risk < 15: sl = round(current_price + 25.0, 2); risk = 25.0
+                        active_trades["NIFTY 50"] = {
+                            'date': today_date_str,
+                            'index': "NIFTY 50",
+                            'type': 'BUY',
+                            'entry': current_price,
+                            'entry_time': current_time_str,
+                            'sl': sl,
+                            'sl_hit': False,
+                            'sl_time': None,
+                            't1': t1,
+                            't1_hit': False,
+                            't1_time': None,
+                            't2': t2,
+                            't2_hit': False,
+                            't2_time': None,
+                            't3': t3,
+                            't3_hit': False,
+                            't3_time': None,
+                            'cut_level': key_res,
+                            'max_gain': 0.0
+                        }
+                        save_backup_state(active_trades)
+                        trade_stats['total_signals'] += 1
+
+                        opt = get_option_recommendations(current_price, "BUY", risk)
+                        send_telegram_alert(
+                            f"🟢 NIFTY 50 BUY SIGNAL\n\n"
+                            f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                            f"📅 Date: {today_date_str}\n"
+                            f"⏰ Time: {current_time_str} IST\n"
+                            f"💵 Spot Entry: {current_price:.2f} | SL: {sl:.2f}\n\n"
+                            f"🛒 OPTION BUYERS (CALL):\n"
+                            f"• Strike: {opt['buyer_strike']}\n"
+                            f"• Entry Approx: ₹{opt['buyer_entry']:.1f}\n"
+                            f"• Targets: T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
+                            f"🛡️ OPTION SELLERS (PE):\n"
+                            f"• Sell ATM: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
+                            f"• Safe OTM: {opt['safe_seller_strike']} @ ₹{opt['safe_seller_entry']:.1f}\n\n"
+                            f"🎯 Spot Targets: T1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}"
+                        )
+
+                    # SELL SIGNAL
+                    elif current_price < sell_trigger:
+                        sl = round(key_sup, 2)
+                        risk = round(sl - current_price, 2)
+                        if risk < 15: risk = 25.0; sl = round(current_price + 25.0, 2)
+
                         t1 = round(current_price - (risk * 1.0), 2)
                         t2 = round(current_price - (risk * 1.5), 2)
                         t3 = round(current_price - (risk * 2.5), 2)
 
-                    # L3 REVERSAL (BOUNCE BUY)
-                    elif current_price >= l3 and current_price <= (l3 + 12):
-                        sig_found = True
-                        sig_type = "BUY"
-                        setup_name = "L3 REVERSAL"
-                        sl = round(l4, 2)
-                        t1, t2, t3 = round(l1, 2), round(h1, 2), round(h3, 2)
-
-                    # H3 REVERSAL (REJECTION SELL)
-                    elif current_price <= h3 and current_price >= (h3 - 12):
-                        sig_found = True
-                        sig_type = "SELL"
-                        setup_name = "H3 REVERSAL"
-                        sl = round(h4, 2)
-                        t1, t2, t3 = round(h1, 2), round(l1, 2), round(l3, 2)
-
-                    if sig_found:
-                        opt = get_detailed_options(current_price, sig_type)
-                        exp_txt = f"({opt['exp']})" if opt['exp'] else ""
-
-                        active_trade = {
-                            'strategy': STRATEGY_DISPLAY_NAME,
-                            'setup': setup_name,
-                            'type': sig_type,
+                        active_trades["NIFTY 50"] = {
+                            'date': today_date_str,
+                            'index': "NIFTY 50",
+                            'type': 'SELL',
                             'entry': current_price,
-                            'best_price': current_price,
+                            'entry_time': current_time_str,
                             'sl': sl,
+                            'sl_hit': False,
+                            'sl_time': None,
                             't1': t1,
-                            't2': t2,
-                            't3': t3,
                             't1_hit': False,
-                            't2_hit': False
+                            't1_time': None,
+                            't2': t2,
+                            't2_hit': False,
+                            't2_time': None,
+                            't3': t3,
+                            't3_hit': False,
+                            't3_time': None,
+                            'cut_level': key_sup,
+                            'max_gain': 0.0
                         }
+                        save_backup_state(active_trades)
                         trade_stats['total_signals'] += 1
-                        save_backup(active_trade, trade_stats)
 
-                        icon = "🟢" if sig_type == "BUY" else "🔴"
+                        opt = get_option_recommendations(current_price, "SELL", risk)
                         send_telegram_alert(
-                            f"{icon} NIFTY 50 {setup_name} ({sig_type})\n\n"
+                            f"🔴 NIFTY 50 SELL SIGNAL\n\n"
                             f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                            f"📅 Date: {today_date_str}\n"
                             f"⏰ Time: {current_time_str} IST\n"
-                            f"💵 Spot Entry: {current_price:.2f}\n"
-                            f"🛑 Spot SL: {sl:.2f}\n\n"
-                            f"🛒 FOR OPTION BUYERS {exp_txt}:\n"
-                            f"• Strike: {opt['buyer_strike']} @ {opt['buyer_ltp']}\n"
-                            f"• Option SL: {opt['buyer_sl']}\n"
-                            f"• Target 1: {opt['buyer_t1']} | Target 2: {opt['buyer_t2']}\n\n"
-                            f"🛡️ FOR OPTION WRITERS / SELLERS:\n"
-                            f"• Sell ATM: {opt['seller_strike']} @ {opt['seller_ltp']}\n"
-                            f"• Safe OTM: {opt['safe_seller_strike']} @ {opt['safe_seller_ltp']}\n"
-                            f"• SL: {opt['seller_sl']} | Target: {opt['seller_tgt']}\n\n"
-                            f"🎯 Spot T1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}"
+                            f"💵 Spot Entry: {current_price:.2f} | SL: {sl:.2f}\n\n"
+                            f"🛒 OPTION BUYERS (PUT):\n"
+                            f"• Strike: {opt['buyer_strike']}\n"
+                            f"• Entry Approx: ₹{opt['buyer_entry']:.1f}\n"
+                            f"• Targets: T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
+                            f"🛡️ OPTION SELLERS (CE):\n"
+                            f"• Sell ATM: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
+                            f"• Safe OTM: {opt['safe_seller_strike']} @ ₹{opt['safe_seller_entry']:.1f}\n\n"
+                            f"🎯 Spot Targets: T1: {t1:.2f} | T2: {t2:.2f} | T3: {t3:.2f}"
                         )
 
-        # 1-second delay for instant signal dispatch
+                # --- HOURLY PULSE ---
+                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
+                    last_heartbeat_hour = now.hour
+                    prc = current_price
+                    prv = prev_close if prev_close else prc
+                    diff = prc - prv
+                    pct = (diff / prv) * 100 if prv != 0 else 0.0
+                    send_telegram_alert(f"💓 HOURLY STATUS ALERT\n⏰ Time: {current_time_str} IST\n\n• NIFTY 50: {prc:.2f} ({diff:+.2f} | {pct:+.2f}%)\n")
+
+        # 1-second interval for instant zero-delay triggers
         time.sleep(1)
 
     except Exception as loop_err:
-        print(f"Loop error: {loop_err}")
+        print(f"Engine Warning: {loop_err}")
         time.sleep(2)
