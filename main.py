@@ -27,8 +27,6 @@ TELEGRAM_BOT_TOKEN = "8804327561:AAFMvoqtLxbnCkoa3YocxBOArlppl9F0pw4"
 
 ADMIN_CHAT_ID = "6789591588"
 CHANNEL_CHAT_ID = "-1004416495917"
-
-# Public alerts reach the channel members and the admin
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
@@ -87,23 +85,14 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
-# WEEKEND & HOLIDAY PROTECTION (ADMIN ALERT ONLY)
-today_weekday = datetime.now(IST).weekday()
-if today_weekday in [5, 6]:
-    day_name = "Saturday" if today_weekday == 5 else "Sunday"
-    send_admin_alert(f"🏖️ WEEKEND MARKET HOLIDAY ({day_name})!\n• Market is closed today.\n• Channel alerts paused.")
-    exit(0)
-
-try:
-    holidays_df = capital_market.holiday_trading()
-    today_str = datetime.now(IST).strftime('%d-%b-%Y')
-    if holidays_df is not None and not holidays_df.empty:
-        if 'tradingDate' in holidays_df.columns and today_str in holidays_df['tradingDate'].values:
-            reason = holidays_df[holidays_df['tradingDate'] == today_str]['description'].values[0]
-            send_admin_alert(f"🏖️ NSE MARKET HOLIDAY TODAY!\n• Reason: {reason}\n• Engine paused safely.")
-            exit(0)
-except Exception as e:
-    print(f"Holiday check note: {e}")
+# --- BOT INSTANT STARTUP ALERT TO CHANNEL ---
+send_telegram_alert(
+    f"🚀 ALGO SCANNER LIVE\n\n"
+    f"📍 Channel: {CHANNEL_NAME}\n"
+    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
+    f"🛡️ Status: Engine Running & Connected Successfully!"
+)
 
 INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
 YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
@@ -174,21 +163,11 @@ def clear_expiry_ledger():
 active_trades = load_backup_state()
 restored_trades = [f"{k} ({v['type']} @ {v['entry']})" for k, v in active_trades.items() if v is not None]
 
-# BOT RUN & STARTUP STATUS (DIRECTED TO ADMIN ONLY)
 if restored_trades:
     send_admin_alert(
         f"♻️ BOT RESUMED & STATE RESTORED\n\n"
-        f"⚡ Channel: {CHANNEL_NAME}\n"
-        f"Active Trades:\n• " + "\n• ".join(restored_trades) + "\n\n"
-        f"🎯 Active Stop Loss & Targets running without duplicate channel alerts."
-    )
-else:
-    send_admin_alert(
-        f"🚀 ALGO SCANNER ENGINE INITIALIZED\n\n"
-        f"📍 Channel: {CHANNEL_NAME}\n"
-        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-        f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
-        f"🛡️ Active Session: 09:00 AM - 03:40 PM"
+        f"⚡ Active Retained Trades:\n• " + "\n• ".join(restored_trades) + "\n\n"
+        f"🎯 Retaining active SL & Targets without repeated alerts."
     )
 
 def is_today_nifty_expiry():
@@ -296,7 +275,7 @@ def calculate_camarilla_pivots(index_name):
                 "Prev_Close": round(close, 2)
             }
     except Exception as e:
-        print(f"Camarilla calculation note ({index_name}): {e}")
+        print(f"Camarilla error ({index_name}): {e}")
     return None
 
 for idx in INDEX_WATCHLIST:
@@ -361,7 +340,7 @@ while True:
         exit_alert_time = datetime.strptime("15:25", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 1. 09:00 AM WELCOME ALERT (ADMIN ONLY)
+        # 1. 09:00 AM MARKET OPENING ALERT (ADMIN ONLY)
         if not open_alert_sent and (market_open_notify_time <= current_time < pivot_alert_time):
             open_alert_sent = True
             send_admin_alert(
@@ -369,10 +348,10 @@ while True:
                 f"📍 Channel: {CHANNEL_NAME}\n"
                 f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                 f"📅 Date: {today_date_str}\n"
-                f"🛡️ Pre-market tracking active. Channel alerts start at 09:05 AM IST."
+                f"🛡️ Pre-market tracking online. Trading signals commence at 09:15 AM IST."
             )
 
-        # 2. 09:05 AM CAMARILLA SUPPORT & RESISTANCE (PUBLIC CHANNEL ALERT)
+        # 2. 09:05 AM CAMARILLA SUPPORT & RESISTANCE (CHANNEL MEMBERS)
         if not pivots_alert_sent and (pivot_alert_time <= current_time < start_trade_time):
             pivots_alert_sent = True
             p_msg = f"📐 DAILY CAMARILLA SUPPORT & RESISTANCE (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
@@ -382,12 +361,12 @@ while True:
                     p_msg += f"🔹 {idx}\n• Pivot: {lvl['Pivot']:.2f}\n• R4 (Breakout Buy): {lvl['R4']:.2f}\n• R3 (Resistance): {lvl['R3']:.2f}\n• S3 (Support): {lvl['S3']:.2f}\n• S4 (Breakdown Sell): {lvl['S4']:.2f}\n\n"
             send_telegram_alert(p_msg)
 
-        # 3. 03:25 PM INTRADAY AUTO-EXIT (PUBLIC CHANNEL ALERT)
+        # 3. 03:25 PM INTRADAY AUTO-EXIT (CHANNEL MEMBERS)
         if current_time >= exit_alert_time and not eod_alert_sent:
             eod_alert_sent = True
             send_telegram_alert(
                 "⚠️ INTRADAY AUTO-EXIT ALERT (03:25 PM)\n\n"
-                "• Market session ending shortly.\n"
+                "• Market closing soon.\n"
                 "• Squaring off all active intraday positions safely."
             )
             for idx in INDEX_WATCHLIST:
@@ -403,13 +382,12 @@ while True:
                     active_trades[idx] = None
             save_state(active_trades)
 
-        # 4. 03:40 PM SHUTDOWN, DAILY & EXPIRY PDF REPORT (PUBLIC CHANNEL & EMAIL)
+        # 4. 03:40 PM SHUTDOWN, DAILY & EXPIRY PDF REPORT
         if current_time >= shutdown_time:
             today_is_exp = is_today_nifty_expiry()
             records = load_expiry_ledger()
             today_records = [r for r in records if r.get('date') == today_date_str]
 
-            # Daily Report Dispatch
             daily_summary = (
                 f"📊 DAILY MARKET SUMMARY\n\n"
                 f"📅 Date: {today_date_str}\n"
@@ -426,7 +404,6 @@ while True:
             send_telegram_document(daily_pdf_file, caption=f"📄 Daily Performance Report ({today_date_str})")
             send_email_with_pdf(daily_pdf_file, f"Daily Market Report - {today_date_str}", daily_summary)
 
-            # Expiry-to-Expiry Report Dispatch
             if today_is_exp:
                 exp_type = "MONTHLY EXPIRY" if is_monthly_expiry_check() else "WEEKLY EXPIRY"
                 exp_summary = (
@@ -466,7 +443,7 @@ while True:
 
                     # 1. POSITION TRACKING (TARGETS & STOP LOSS)
                     if trade is not None:
-                        # BUY POSITION
+                        # BUY TRADE
                         if trade['type'] == 'BUY':
                             if current_price <= trade['sl']:
                                 trade_stats['sl_hits'] += 1
@@ -520,7 +497,7 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                        # SELL POSITION
+                        # SELL TRADE
                         elif trade['type'] == 'SELL':
                             if current_price >= trade['sl']:
                                 trade_stats['sl_hits'] += 1
@@ -585,7 +562,6 @@ while True:
                         entry_type = None
                         calc_sl = None
 
-                        # DYNAMIC MOMENTUM CROSSOVER
                         if current_price <= pp and prev_tick > pp:
                             trigger_signal = "SELL"
                             entry_type = "MOMENTUM SPIKE"
@@ -594,8 +570,6 @@ while True:
                             trigger_signal = "BUY"
                             entry_type = "MOMENTUM SPIKE"
                             calc_sl = round(s3 if current_price > s3 else pp, 2)
-
-                        # CAMARILLA BREAKOUT FALLBACK TRIGGER
                         elif current_price > r4:
                             trigger_signal = "BUY"
                             entry_type = "CAMARILLA BREAKOUT"
@@ -605,7 +579,6 @@ while True:
                             entry_type = "CAMARILLA BREAKDOWN"
                             calc_sl = round(s3, 2)
 
-                        # DISPATCH TRIGGERED SIGNAL TO CHANNEL
                         if trigger_signal:
                             if trigger_signal == "BUY":
                                 risk = round(current_price - calc_sl, 2)
