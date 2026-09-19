@@ -36,18 +36,21 @@ SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
+# --- UPDATED ADMIN ALERT FUNCTION WITH DETAILED API RESPONSE LOGGING ---
 def send_admin_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        tele_session.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": msg}, timeout=4)
+        res = tele_session.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": msg}, timeout=10)
+        print(f"Telegram API Response: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"Admin Alert Error: {e}")
+        print(f"Admin Alert Network Error: {e}")
 
 def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in PUBLIC_ALERT_IDS:
         try:
-            tele_session.post(url, json={"chat_id": chat_id, "text": msg}, timeout=4)
+            res = tele_session.post(url, json={"chat_id": chat_id, "text": msg}, timeout=4)
+            print(f"Public Alert Response ({chat_id}): {res.status_code} - {res.text}")
         except Exception as e:
             print(f"Telegram Alert Error ({chat_id}): {e}")
 
