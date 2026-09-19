@@ -23,10 +23,10 @@ IST = ZoneInfo("Asia/Kolkata")
 start_now = datetime.now(IST)
 
 # --- TELEGRAM CONFIGURATION ---
-TE8999213661:"AAExlh3gK1ZbEzfa2aS-By0ADz7Hw4K4TSw"
+TELEGRAM_BOT_TOKEN = "8804327561:AAFMvoqtLxbnCkoa3YocxBOArlppl9F0pw4"
 
 ADMIN_CHAT_ID = "6789591588"
-CHANNEL_CHAT_ID = "@sastradinglab"
+CHANNEL_CHAT_ID = "-1004416495917"
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
@@ -554,7 +554,7 @@ while True:
                         entry_type = None
                         calc_sl = None
 
-                        # 1. DYNAMIC MOMENTUM CROSSOVER (PICTURE 2 STYLE TRIGGER)
+                        # 1. DYNAMIC MOMENTUM CROSSOVER
                         if current_price <= pp and prev_tick > pp:
                             trigger_signal = "SELL"
                             entry_type = "MOMENTUM SPIKE"
@@ -576,7 +576,6 @@ while True:
 
                         # DISPATCH SIGNAL IF TRIGGERED
                         if trigger_signal:
-                            # ഡൈനാമിക് റിസ്ക് കണക്കുകൂട്ടുന്നു (പൈത്തൺ സ്വയം കണക്കാക്കുന്നു)
                             if trigger_signal == "BUY":
                                 risk = round(current_price - calc_sl, 2)
                                 min_limit = 15.0 if idx == "NIFTY 50" else 40.0
