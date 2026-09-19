@@ -23,15 +23,15 @@ IST = ZoneInfo("Asia/Kolkata")
 start_now = datetime.now(IST)
 
 # --- TELEGRAM CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "8804327561:AAFMvoqtLxbnCkoa3YocxBOArlppl9F0pw4"
+TELEGRAM_BOT_TOKEN = "8999213661:AAEfHcQzRZ2-ZI4bbfq8UcuGA48ihzQKchA"
 
 ADMIN_CHAT_ID = "6789591588"
-CHANNEL_CHAT_ID = "-1004416495917"
+CHANNEL_CHAT_ID = "@sastradinglab"
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
-CHANNEL_NAME = "SAS LEVEL TRACKER"
+CHANNEL_NAME = "SAS TRADING LAB"
 
 # --- EMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -41,7 +41,8 @@ RECEIVER_EMAILS = ["shinos99@gmail.com"]
 def send_admin_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        tele_session.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": msg}, timeout=4)
+        res = tele_session.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": msg}, timeout=10)
+        print(f"Admin alert status: {res.status_code}")
     except Exception as e:
         print(f"Admin Alert Error: {e}")
 
@@ -49,7 +50,8 @@ def send_telegram_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in PUBLIC_ALERT_IDS:
         try:
-            tele_session.post(url, json={"chat_id": chat_id, "text": msg}, timeout=4)
+            res = tele_session.post(url, json={"chat_id": chat_id, "text": msg}, timeout=10)
+            print(f"Telegram alert ({chat_id}): {res.status_code}")
         except Exception as e:
             print(f"Telegram Alert Error ({chat_id}): {e}")
 
@@ -58,7 +60,8 @@ def send_telegram_document(file_path, caption=""):
     for chat_id in PUBLIC_ALERT_IDS:
         try:
             with open(file_path, 'rb') as doc:
-                requests.post(url, data={'chat_id': chat_id, 'caption': caption}, files={'document': doc}, timeout=25)
+                res = requests.post(url, data={'chat_id': chat_id, 'caption': caption}, files={'document': doc}, timeout=25)
+                print(f"Telegram doc ({chat_id}): {res.status_code}")
         except Exception as e:
             print(f"Telegram Doc Error ({chat_id}): {e}")
 
@@ -85,14 +88,15 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
-# --- BOT INSTANT STARTUP ALERT TO CHANNEL ---
-send_telegram_alert(
+# --- BOT INSTANT STARTUP ALERT ---
+startup_message = (
     f"🚀 ALGO SCANNER LIVE\n\n"
     f"📍 Channel: {CHANNEL_NAME}\n"
     f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
     f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
     f"🛡️ Status: Engine Running & Connected Successfully!"
 )
+send_telegram_alert(startup_message)
 
 INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
 YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
@@ -340,7 +344,7 @@ while True:
         exit_alert_time = datetime.strptime("15:25", "%H:%M").time()
         shutdown_time = datetime.strptime("15:40", "%H:%M").time()
 
-        # 1. 09:00 AM MARKET OPENING ALERT (ADMIN ONLY)
+        # 1. 09:00 AM MARKET OPENING ALERT
         if not open_alert_sent and (market_open_notify_time <= current_time < pivot_alert_time):
             open_alert_sent = True
             send_admin_alert(
@@ -351,7 +355,7 @@ while True:
                 f"🛡️ Pre-market tracking online. Trading signals commence at 09:15 AM IST."
             )
 
-        # 2. 09:05 AM CAMARILLA SUPPORT & RESISTANCE (CHANNEL MEMBERS)
+        # 2. 09:05 AM CAMARILLA LEVELS
         if not pivots_alert_sent and (pivot_alert_time <= current_time < start_trade_time):
             pivots_alert_sent = True
             p_msg = f"📐 DAILY CAMARILLA SUPPORT & RESISTANCE (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
@@ -361,7 +365,7 @@ while True:
                     p_msg += f"🔹 {idx}\n• Pivot: {lvl['Pivot']:.2f}\n• R4 (Breakout Buy): {lvl['R4']:.2f}\n• R3 (Resistance): {lvl['R3']:.2f}\n• S3 (Support): {lvl['S3']:.2f}\n• S4 (Breakdown Sell): {lvl['S4']:.2f}\n\n"
             send_telegram_alert(p_msg)
 
-        # 3. 03:25 PM INTRADAY AUTO-EXIT (CHANNEL MEMBERS)
+        # 3. 03:25 PM INTRADAY AUTO-EXIT
         if current_time >= exit_alert_time and not eod_alert_sent:
             eod_alert_sent = True
             send_telegram_alert(
