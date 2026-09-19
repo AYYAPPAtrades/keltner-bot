@@ -542,42 +542,47 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                    # SIGNAL GENERATION (DYNAMIC MOMENTUM CROSSOVER + CAMARILLA BREAKOUT)
+                    # SIGNAL GENERATION (DYNAMIC AUTO CALCULATION - NO FIXED RISK)
                     pivots = camarilla_levels.get(idx)
                     can_trade = (start_trade_time <= current_time < exit_alert_time)
 
                     if can_trade and active_trades[idx] is None and pivots is not None:
                         r4, s4, r3, s3, pp = pivots['R4'], pivots['S4'], pivots['R3'], pivots['S3'], pivots['Pivot']
-                        fixed_sl_risk = 18.90 if idx == "NIFTY 50" else 48.00
 
                         trigger_signal = None
                         entry_type = None
                         calc_sl = None
 
-                        # 1. DYNAMIC MOMENTUM CROSSOVER (PICTURE 2 STYLE TRIGGER - 18.9 PTS SL)
+                        # 1. DYNAMIC MOMENTUM CROSSOVER (PICTURE 2 STYLE TRIGGER)
                         if current_price <= pp and prev_tick > pp:
                             trigger_signal = "SELL"
                             entry_type = "MOMENTUM SPIKE"
-                            calc_sl = round(current_price + fixed_sl_risk, 2)
+                            calc_sl = round(r3 if current_price < r3 else pp, 2)
                         elif current_price >= pp and prev_tick < pp:
                             trigger_signal = "BUY"
                             entry_type = "MOMENTUM SPIKE"
-                            calc_sl = round(current_price - fixed_sl_risk, 2)
+                            calc_sl = round(s3 if current_price > s3 else pp, 2)
 
                         # 2. CAMARILLA BREAKOUT FALLBACK TRIGGER
                         elif current_price > r4:
                             trigger_signal = "BUY"
                             entry_type = "CAMARILLA BREAKOUT"
-                            calc_sl = round(current_price - fixed_sl_risk, 2)
+                            calc_sl = round(r3, 2)
                         elif current_price < s4:
                             trigger_signal = "SELL"
                             entry_type = "CAMARILLA BREAKDOWN"
-                            calc_sl = round(current_price + fixed_sl_risk, 2)
+                            calc_sl = round(s3, 2)
 
                         # DISPATCH SIGNAL IF TRIGGERED
                         if trigger_signal:
-                            risk = fixed_sl_risk
+                            # ഡൈനാമിക് റിസ്ക് കണക്കുകൂട്ടുന്നു (പൈത്തൺ സ്വയം കണക്കാക്കുന്നു)
                             if trigger_signal == "BUY":
+                                risk = round(current_price - calc_sl, 2)
+                                min_limit = 15.0 if idx == "NIFTY 50" else 40.0
+                                if risk < min_limit:
+                                    risk = min_limit
+                                    calc_sl = round(current_price - risk, 2)
+
                                 t1 = round(current_price + (risk * 1.437), 2)
                                 t2 = round(current_price + (risk * 1.915), 2)
                                 t3 = round(current_price + (risk * 2.873), 2)
@@ -610,6 +615,12 @@ while True:
                                 )
 
                             elif trigger_signal == "SELL":
+                                risk = round(calc_sl - current_price, 2)
+                                min_limit = 15.0 if idx == "NIFTY 50" else 40.0
+                                if risk < min_limit:
+                                    risk = min_limit
+                                    calc_sl = round(current_price + risk, 2)
+
                                 t1 = round(current_price - (risk * 1.437), 2)
                                 t2 = round(current_price - (risk * 1.915), 2)
                                 t3 = round(current_price - (risk * 2.873), 2)
