@@ -23,7 +23,7 @@ IST = ZoneInfo("Asia/Kolkata")
 start_now = datetime.now(IST)
 
 # --- TELEGRAM CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "8999213661:AAEfHcQzRZ2-ZI4bbfq8UcuGA48ihzQKchA"
+TELEGRAM_BOT_TOKEN = "8804327561:AAFMvoqtLxbnCkoa3YocxBOArlppl9F0pw4"
 
 ADMIN_CHAT_ID = "6789591588"
 CHANNEL_CHAT_ID = "@sastradinglab"
