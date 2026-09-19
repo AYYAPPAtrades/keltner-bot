@@ -22,13 +22,11 @@ from reportlab.lib import colors
 IST = ZoneInfo("Asia/Kolkata")
 start_now = datetime.now(IST)
 
-# --- TELEGRAM CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = "8804327561:AAHYL_srWzPSWCZR5aJe_tMOfD24HblsL_Q"
-
+# --- TELEGRAM CONFIGURATION (UPDATED CORRECT TOKEN WITH '0') ---
+TELEGRAM_BOT_TOKEN = "8804327561:AAHYL_srWzPSWCZR5aJe_tM0fD24HblsL_Q"
 ADMIN_CHAT_ID = "6789591588"
 CHANNEL_CHAT_ID = "-1004416495917"
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
-
 
 tele_session = requests.Session()
 STRATEGY_DISPLAY_NAME = "MOMENTUM SPIKE"
@@ -38,7 +36,7 @@ SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
-# --- UPDATED ADMIN ALERT FUNCTION WITH DETAILED API RESPONSE LOGGING ---
+# --- DETAILED LOGGING FUNCTION ---
 def send_admin_alert(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
