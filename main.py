@@ -85,6 +85,16 @@ def send_email_with_pdf(file_path, subject, body):
         server.quit()
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
+        
+# --- BOT INSTANT STARTUP ALERT (ADMIN ONLY) ---
+startup_message = (
+    "🚀 ALGO SCANNER LIVE\n\n"
+    f"📍 Channel: {CHANNEL_NAME}\n"
+    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
+    "🛡️ Status: Engine Running & Connected Successfully!"
+)
+send_admin_alert(startup_message)
 
 # TIMING FLAGS
 open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
