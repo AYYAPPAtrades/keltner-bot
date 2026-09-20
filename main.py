@@ -83,11 +83,14 @@ def send_email_with_pdf(file_path, subject, body):
         server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
         server.quit()
-        except Exception as e:
+    except Exception as e:
         print(f"Email Dispatch Warning: {e}")
 
+# TIMING FLAGS
 open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
 pivots_alert_sent = start_now.time() >= datetime.strptime("09:05", "%H:%M").time()
+eod_alert_sent = False
+last_heartbeat_hour = -1
 
 # WEEKEND & HOLIDAY PROTECTION
 today_weekday = datetime.now(IST).weekday()
@@ -123,12 +126,6 @@ prev_close_dict = {}
 last_tick_prices = {}
 camarilla_levels = {}
 daily_completed_trades = []
-
-# --- CORRECTION: TIMING FLAGS ---
-open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
-pivots_alert_sent = start_now.time() >= datetime.strptime("09:05", "%H:%M").time()
-eod_alert_sent = False
-last_heartbeat_hour = -1
 
 # --- PERSISTENT STATE MANAGEMENT ---
 def load_backup_state():
@@ -205,7 +202,7 @@ def is_today_monthly_expiry():
     last_day_of_month = next_month - timedelta(days=next_month.day)
     
     cur_day = last_day_of_month
-    while cur_day.weekday() != 1:  # Tuesday is 1
+    while cur_day.weekday() != 1:
         cur_day -= timedelta(days=1)
         
     while cur_day in holiday_dates or cur_day.weekday() in [5, 6]:
@@ -426,8 +423,6 @@ while True:
 
             # 1. DAILY REPORT
             daily_pnl = sum(r.get('pnl', 0.0) for r in daily_completed_trades)
-            daily_indicator = "🟢 POSITIVE" if daily_pnl >= 0 else "🔴 NEGATIVE"
-
             daily_summary = (
                 f"📊 DAILY PERFORMANCE SUMMARY (03:40 PM)\n\n"
                 f"📅 Date: {today_date_str}\n"
@@ -499,7 +494,6 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                            # T1 Hit - SL moves to cost silently
                             if not trade.get('t1_hit') and current_price >= trade['t1']:
                                 trade['t1_hit'] = True
                                 trade['sl'] = trade['entry']
@@ -511,7 +505,6 @@ while True:
                                     f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
                                 )
 
-                            # T2 Hit Alert
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price >= trade['t2']:
                                 trade['t2_hit'] = True
                                 trade['sl'] = trade['t1']
@@ -522,7 +515,6 @@ while True:
                                     f"Current: {current_price:.2f}"
                                 )
 
-                            # T3 Hit Alert
                             if trade.get('t2_hit') and current_price >= trade['t3']:
                                 trade['t3_hit'] = True
                                 pnl = current_price - trade['entry']
@@ -556,7 +548,6 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                            # T1 Hit - SL moves to cost silently
                             if not trade.get('t1_hit') and current_price <= trade['t1']:
                                 trade['t1_hit'] = True
                                 trade['sl'] = trade['entry']
@@ -568,7 +559,6 @@ while True:
                                     f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
                                 )
 
-                            # T2 Hit Alert
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price <= trade['t2']:
                                 trade['t2_hit'] = True
                                 trade['sl'] = trade['t1']
@@ -579,7 +569,6 @@ while True:
                                     f"Current: {current_price:.2f}"
                                 )
 
-                            # T3 Hit Alert
                             if trade.get('t2_hit') and current_price <= trade['t3']:
                                 trade['t3_hit'] = True
                                 pnl = trade['entry'] - current_price
