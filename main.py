@@ -22,7 +22,7 @@ from reportlab.lib import colors
 IST = ZoneInfo("Asia/Kolkata")
 start_now = datetime.now(IST)
 
-# --- TELEGRAM CONFIGURATION (ORIGINAL BOT) ---
+# --- TELEGRAM CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8804327561:AAHYL_srWzPSWCZR5aJe_tM0fD24HblsL_Q"
 ADMIN_CHAT_ID = "6789591588"
 CHANNEL_CHAT_ID = "-1004416495917"
@@ -121,7 +121,7 @@ last_tick_prices = {}
 camarilla_levels = {}
 daily_completed_trades = []
 
-# --- TIMING FLAG FIX ---
+# --- CORRECTION: TIMING FLAGS ---
 open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
 pivots_alert_sent = start_now.time() >= datetime.strptime("09:05", "%H:%M").time()
 eod_alert_sent = False
@@ -185,7 +185,7 @@ if restored_trades:
     send_admin_alert(
         f"♻️ BOT RESUMED & STATE RESTORED\n\n"
         f"⚡ Active Retained Positions:\n• " + "\n• ".join(restored_trades) + "\n\n"
-        f"🎯 Retaining active SL & Targets without duplicate alerts."
+        f"🎯 Retaining active SL & Targets without repeated alerts."
     )
 else:
     send_admin_alert(
@@ -202,7 +202,7 @@ def is_today_monthly_expiry():
     last_day_of_month = next_month - timedelta(days=next_month.day)
     
     cur_day = last_day_of_month
-    while cur_day.weekday() != 1:  # Tuesday
+    while cur_day.weekday() != 1:  # Tuesday is 1
         cur_day -= timedelta(days=1)
         
     while cur_day in holiday_dates or cur_day.weekday() in [5, 6]:
@@ -277,7 +277,7 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         "safe_seller_entry": safe_seller_entry
     }
 
-# --- CAMARILLA & VOLATILITY DYNAMICS ---
+# --- DYNAMIC CAMARILLA & VOLATILITY DYNAMICS ---
 def calculate_camarilla_pivots(index_name):
     try:
         ticker = YF_TICKERS.get(index_name)
