@@ -89,11 +89,13 @@ def send_email_with_pdf(file_path, subject, body):
 # --- BOT INSTANT STARTUP ALERT (ADMIN ONLY) ---
 startup_message = (
     "🚀 ALGO SCANNER LIVE\n\n"
-    f"📍 Channel: {CHANNEL_NAME}\n"
+    "📍 Channel: SAS LEVEL TRACKER\n"
     f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
     f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
     "🛡️ Status: Engine Running & Connected Successfully!"
 )
+send_admin_alert(startup_message)
+
 send_admin_alert(startup_message)
 
 # TIMING FLAGS
