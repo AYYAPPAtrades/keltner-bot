@@ -83,8 +83,11 @@ def send_email_with_pdf(file_path, subject, body):
         server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
         server.quit()
-    except Exception as e:
+        except Exception as e:
         print(f"Email Dispatch Warning: {e}")
+
+open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
+pivots_alert_sent = start_now.time() >= datetime.strptime("09:05", "%H:%M").time()
 
 # WEEKEND & HOLIDAY PROTECTION
 today_weekday = datetime.now(IST).weekday()
