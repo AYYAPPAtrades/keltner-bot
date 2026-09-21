@@ -116,7 +116,7 @@ if today_date in holiday_dates:
     send_admin_alert(f"🏖️ NSE MARKET HOLIDAY TODAY ({today_str})!\n• Market is closed.")
     exit(0)
 
-# ONLY NIFTY 50 (NIFTY BANK REMOVED)
+# ONLY NIFTY 50
 INDEX_WATCHLIST = ["NIFTY 50"]
 YF_TICKERS = {"NIFTY 50": "^NSEI"}
 BACKUP_FILE = "daily_active_trades.json"
@@ -474,23 +474,24 @@ while True:
                         # --- BUY POSITION MONITORING ---
                         if trade['type'] == 'BUY':
                             if current_price <= trade['sl']:
-                                pnl = current_price - trade['entry']
-                                trade['exit_price'] = current_price
-                                trade['pnl'] = pnl
-                                
                                 if trade.get('t2_hit'):
+                                    pnl = trade['t2'] - trade['entry']
                                     trade['status'] = 'Target 2 Achieved'
                                 elif trade.get('t1_hit'):
+                                    pnl = trade['t1'] - trade['entry']
                                     trade['status'] = 'Target 1 Achieved'
                                 else:
+                                    pnl = current_price - trade['entry']
                                     trade['status'] = 'Stop Loss Hit'
-                                    
+
+                                trade['exit_price'] = current_price
+                                trade['pnl'] = pnl
                                 record_to_expiry_ledger(trade)
-                                
+
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
                                     send_telegram_alert(f"🛑 STOP LOSS HIT\n📍 Index: {idx} (CALL)\n💵 Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
-                                
+
                                 active_trades[idx] = None
                                 save_state(active_trades)
                                 continue
@@ -518,8 +519,8 @@ while True:
 
                             if trade.get('t2_hit') and current_price >= trade['t3']:
                                 trade['t3_hit'] = True
-                                pnl = current_price - trade['entry']
-                                trade['exit_price'] = current_price
+                                pnl = trade['t3'] - trade['entry']
+                                trade['exit_price'] = trade['t3']
                                 trade['pnl'] = pnl
                                 trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
@@ -535,23 +536,24 @@ while True:
                         # --- SELL POSITION MONITORING ---
                         elif trade['type'] == 'SELL':
                             if current_price >= trade['sl']:
-                                pnl = trade['entry'] - current_price
-                                trade['exit_price'] = current_price
-                                trade['pnl'] = pnl
-                                
                                 if trade.get('t2_hit'):
+                                    pnl = trade['entry'] - trade['t2']
                                     trade['status'] = 'Target 2 Achieved'
                                 elif trade.get('t1_hit'):
+                                    pnl = trade['entry'] - trade['t1']
                                     trade['status'] = 'Target 1 Achieved'
                                 else:
+                                    pnl = trade['entry'] - current_price
                                     trade['status'] = 'Stop Loss Hit'
-                                    
+
+                                trade['exit_price'] = current_price
+                                trade['pnl'] = pnl
                                 record_to_expiry_ledger(trade)
-                                
+
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
                                     send_telegram_alert(f"🛑 STOP LOSS HIT\n📍 Index: {idx} (PUT)\n💵 Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
-                                
+
                                 active_trades[idx] = None
                                 save_state(active_trades)
                                 continue
@@ -579,8 +581,8 @@ while True:
 
                             if trade.get('t2_hit') and current_price <= trade['t3']:
                                 trade['t3_hit'] = True
-                                pnl = trade['entry'] - current_price
-                                trade['exit_price'] = current_price
+                                pnl = trade['entry'] - trade['t3']
+                                trade['exit_price'] = trade['t3']
                                 trade['pnl'] = pnl
                                 trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
@@ -593,11 +595,11 @@ while True:
                                 save_state(active_trades)
                                 continue
 
-                    # --- LEVEL CROSSOVER TRIGGER ---
+                    # --- LEVEL CROSSOVER & REVERSAL TRIGGER ---
                     pivots = camarilla_levels.get(idx)
                     can_trade = (start_trade_time <= current_time < exit_alert_time)
 
-                    if can_trade and active_trades[idx] is None and pivots is not None:
+                    if can_trade and pivots is not None:
                         r4, s4, pp = pivots['R4'], pivots['S4'], pivots['Pivot']
                         dynamic_risk = pivots['Dynamic_Risk']
 
@@ -618,76 +620,112 @@ while True:
                             calc_sl = round(current_price + dynamic_risk, 2)
 
                         if trigger_signal:
-                            risk = dynamic_risk
-                            opt = get_option_recommendations(idx, current_price, trigger_signal, risk)
+                            active_t = active_trades[idx]
+                            
+                            # ഓപ്പോസിറ്റ് റിവേഴ്സൽ വന്നാൽ മുൻപത്തെ ട്രേഡ് എക്സിറ്റ് ചെയ്യൽ
+                            if active_t is not None and active_t['type'] != trigger_signal:
+                                if active_t['type'] == 'BUY':
+                                    rev_pnl = current_price - active_t['entry']
+                                    pos_name = "NIFTY 50 (CALL)"
+                                else:
+                                    rev_pnl = active_t['entry'] - current_price
+                                    pos_name = "NIFTY 50 (PUT)"
 
-                            if trigger_signal == "BUY":
-                                t1 = round(current_price + (risk * 1.417), 2)
-                                t2 = round(current_price + (risk * 1.889), 2)
-                                t3 = round(current_price + (risk * 2.834), 2)
+                                if active_t.get('t2_hit'):
+                                    rev_status = "T2 Achieved (Closed in Profit)"
+                                elif active_t.get('t1_hit'):
+                                    rev_status = "T1 Achieved (Closed in Profit / Cost)"
+                                else:
+                                    rev_status = "Closed before SL due to Reversal"
 
-                                active_trades[idx] = {
-                                    'date': today_date_str, 'index': idx, 'type': 'BUY',
-                                    'entry': current_price, 'entry_time': current_time_str,
-                                    'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
-                                    't1_hit': False, 't2_hit': False, 't3_hit': False
-                                }
-                                save_state(active_trades)
-                                trade_stats['total_signals'] += 1
-
-                                send_telegram_alert(
-                                    f"🟢 NIFTY 50 BUY SIGNAL\n\n"
-                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"⏰ Time: {current_time_str} IST\n"
-                                    f"💵 Entry: {current_price:.2f}\n"
-                                    f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
-                                    f"🎯 Target 1: {t1:.2f}\n"
-                                    f"🎯 Target 2: {t2:.2f}\n"
-                                    f"🎯 Target 3: {t3:.2f}\n\n"
-                                    f"🛒 NIFTY BUYERS (CALL):\n"
-                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ NIFTY SELLERS (PUT SHORT):\n"
-                                    f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
-                                    f"⚠️ Strictly for educational study only. Not SEBI registered."
-                                )
-
-                            elif trigger_signal == "SELL":
-                                t1 = round(current_price - (risk * 1.417), 2)
-                                t2 = round(current_price - (risk * 1.889), 2)
-                                t3 = round(current_price - (risk * 2.834), 2)
-
-                                active_trades[idx] = {
-                                    'date': today_date_str, 'index': idx, 'type': 'SELL',
-                                    'entry': current_price, 'entry_time': current_time_str,
-                                    'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
-                                    't1_hit': False, 't2_hit': False, 't3_hit': False
-                                }
-                                save_state(active_trades)
-                                trade_stats['total_signals'] += 1
+                                active_t['exit_price'] = current_price
+                                active_t['pnl'] = rev_pnl
+                                active_t['status'] = rev_status
+                                record_to_expiry_ledger(active_t)
 
                                 send_telegram_alert(
-                                    f"🔴 NIFTY 50 SELL SIGNAL\n\n"
-                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"⏰ Time: {current_time_str} IST\n"
-                                    f"💵 Entry: {current_price:.2f}\n"
-                                    f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
-                                    f"🎯 Target 1: {t1:.2f}\n"
-                                    f"🎯 Target 2: {t2:.2f}\n"
-                                    f"🎯 Target 3: {t3:.2f}\n\n"
-                                    f"🛒 NIFTY BUYERS (PUT):\n"
-                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ NIFTY SELLERS (CALL SHORT):\n"
-                                    f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
-                                    f"⚠️ Strictly for educational study only. Not SEBI registered."
+                                    f"🔄 REVERSAL EXIT (PREVIOUS TRADE)\n"
+                                    f"📍 Index: {pos_name}\n"
+                                    f"💵 Exit Price: {current_price:.2f}\n"
+                                    f"✅ Status: {rev_status}\n"
+                                    f"📊 P/L: {rev_pnl:+.2f} Pts\n"
+                                    f"⚠️ Market trend reversed. Taking opposite position!"
                                 )
+                                active_trades[idx] = None
+                                active_t = None
+
+                            # പുതിയ എൻട്രി അല്ലെങ്കിൽ റിവേഴ്സൽ എൻട്രി എടുക്കൽ
+                            if active_trades[idx] is None:
+                                risk = dynamic_risk
+                                opt = get_option_recommendations(idx, current_price, trigger_signal, risk)
+
+                                if trigger_signal == "BUY":
+                                    t1 = round(current_price + (risk * 1.417), 2)
+                                    t2 = round(current_price + (risk * 1.889), 2)
+                                    t3 = round(current_price + (risk * 2.834), 2)
+
+                                    active_trades[idx] = {
+                                        'date': today_date_str, 'index': idx, 'type': 'BUY',
+                                        'entry': current_price, 'entry_time': current_time_str,
+                                        'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
+                                        't1_hit': False, 't2_hit': False, 't3_hit': False
+                                    }
+                                    save_state(active_trades)
+                                    trade_stats['total_signals'] += 1
+
+                                    send_telegram_alert(
+                                        f"🟢 NIFTY 50 BUY SIGNAL\n\n"
+                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                        f"⏰ Time: {current_time_str} IST\n"
+                                        f"💵 Entry: {current_price:.2f}\n"
+                                        f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
+                                        f"🎯 Target 1: {t1:.2f}\n"
+                                        f"🎯 Target 2: {t2:.2f}\n"
+                                        f"🎯 Target 3: {t3:.2f}\n\n"
+                                        f"🛒 NIFTY BUYERS (CALL):\n"
+                                        f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
+                                        f"• SL: ₹{opt['buyer_sl']:.1f}\n"
+                                        f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
+                                        f"🛡️ NIFTY SELLERS (PUT SHORT):\n"
+                                        f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
+                                        f"• SL: ₹{opt['seller_sl']:.1f}\n"
+                                        f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
+                                        f"⚠️ Strictly for educational study only. Not SEBI registered."
+                                    )
+
+                                elif trigger_signal == "SELL":
+                                    t1 = round(current_price - (risk * 1.417), 2)
+                                    t2 = round(current_price - (risk * 1.889), 2)
+                                    t3 = round(current_price - (risk * 2.834), 2)
+
+                                    active_trades[idx] = {
+                                        'date': today_date_str, 'index': idx, 'type': 'SELL',
+                                        'entry': current_price, 'entry_time': current_time_str,
+                                        'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
+                                        't1_hit': False, 't2_hit': False, 't3_hit': False
+                                    }
+                                    save_state(active_trades)
+                                    trade_stats['total_signals'] += 1
+
+                                    send_telegram_alert(
+                                        f"🔴 NIFTY 50 SELL SIGNAL\n\n"
+                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                        f"⏰ Time: {current_time_str} IST\n"
+                                        f"💵 Entry: {current_price:.2f}\n"
+                                        f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
+                                        f"🎯 Target 1: {t1:.2f}\n"
+                                        f"🎯 Target 2: {t2:.2f}\n"
+                                        f"🎯 Target 3: {t3:.2f}\n\n"
+                                        f"🛒 NIFTY BUYERS (PUT):\n"
+                                        f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
+                                        f"• SL: ₹{opt['buyer_sl']:.1f}\n"
+                                        f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
+                                        f"🛡️ NIFTY SELLERS (CALL SHORT):\n"
+                                        f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
+                                        f"• SL: ₹{opt['seller_sl']:.1f}\n"
+                                        f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
+                                        f"⚠️ Strictly for educational study only. Not SEBI registered."
+                                    )
 
                     last_tick_prices[idx] = current_price
 
