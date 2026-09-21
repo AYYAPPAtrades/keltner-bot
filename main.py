@@ -29,7 +29,7 @@ CHANNEL_CHAT_ID = "-1004416495917"
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
-STRATEGY_DISPLAY_NAME = "SAS PIVOT PULSE"
+STRATEGY_DISPLAY_NAME = "CAMARILLA LEVEL TRACKER"
 
 # --- EMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -85,16 +85,6 @@ def send_email_with_pdf(file_path, subject, body):
         server.quit()
     except Exception as e:
         print(f"Email Dispatch Warning: {e}")
-        
-# --- BOT INSTANT STARTUP ALERT (ADMIN ONLY) ---
-startup_message = (
-    "🚀 ALGO SCANNER LIVE\n\n"
-    "📍 Channel: SAS LEVEL TRACKER\n"
-    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-    f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
-    "🛡️ Status: Engine Running & Connected Successfully!"
-)
-send_admin_alert(startup_message)
 
 # TIMING FLAGS
 open_alert_sent = start_now.time() >= datetime.strptime("09:00", "%H:%M").time()
@@ -221,7 +211,7 @@ def is_today_monthly_expiry():
         
     return today == cur_day
 
-# --- LIVE OPTION CHAIN EXACT PRICING (BUYERS & SELLERS T1, T2, T3, SL) ---
+# --- LIVE OPTION CHAIN EXACT PRICING ---
 def get_option_recommendations(index_name, spot_price, signal_direction, spot_risk):
     step = 50
     atm_strike = int(round(spot_price / step) * step)
@@ -256,13 +246,11 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
     if not seller_entry:
         seller_entry = buyer_entry
 
-    # BUYERS (CALL/PUT BUY) - Targets up, SL down
     buyer_sl = max(5.0, round(buyer_entry - (spot_risk * delta), 1))
     buyer_t1 = round(buyer_entry + (spot_risk * 1.417 * delta), 1)
     buyer_t2 = round(buyer_entry + (spot_risk * 1.889 * delta), 1)
     buyer_t3 = round(buyer_entry + (spot_risk * 2.834 * delta), 1)
 
-    # SELLERS (PE/CE SHORT) - Targets down (premium decays), SL up
     seller_sl = round(seller_entry + (spot_risk * delta), 1)
     seller_t1 = max(2.0, round(seller_entry - (spot_risk * 1.417 * delta), 1))
     seller_t2 = max(2.0, round(seller_entry - (spot_risk * 1.889 * delta), 1))
@@ -506,8 +494,8 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target: {trade['t1']:.2f}\n"
+                                    f"🎯 TARGET 1 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t1']:.2f}\n"
                                     f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). T2 & T3 Active!"
                                 )
 
@@ -516,8 +504,8 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target: {trade['t2']:.2f}\n"
+                                    f"🎯 TARGET 2 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
@@ -529,8 +517,8 @@ while True:
                                 trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target: {trade['t3']:.2f}\n"
+                                    f"🎯 TARGET 3 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t3']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
                                 active_trades[idx] = None
@@ -560,8 +548,8 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target: {trade['t1']:.2f}\n"
+                                    f"🎯 TARGET 1 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t1']:.2f}\n"
                                     f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). T2 & T3 Active!"
                                 )
 
@@ -570,8 +558,8 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target: {trade['t2']:.2f}\n"
+                                    f"🎯 TARGET 2 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
@@ -583,8 +571,8 @@ while True:
                                 trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target: {trade['t3']:.2f}\n"
+                                    f"🎯 TARGET 3 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t3']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
                                 active_trades[idx] = None
@@ -634,19 +622,19 @@ while True:
                                 trade_stats['total_signals'] += 1
 
                                 send_telegram_alert(
-                                    f"🟢 NIFTY 50 BUY SIGNAL (BULLISH)\n\n"
-                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"⏰ Time: {current_time_str}\n"
+                                    f"🟢 NIFTY 50 BUY SIGNAL\n\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"⏰ Time: {current_time_str} IST\n"
                                     f"💵 Entry: {current_price:.2f}\n"
-                                    f"🛑 SL: {calc_sl:.2f}\n\n"
-                                    f"🎯 T1: {t1:.2f}\n"
-                                    f"🎯 T2: {t2:.2f}\n"
-                                    f"🎯 T3: {t3:.2f}\n\n"
-                                    f"🛒 OPTION BUYERS (CALL):\n"
+                                    f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
+                                    f"🎯 Target 1: {t1:.2f}\n"
+                                    f"🎯 Target 2: {t2:.2f}\n"
+                                    f"🎯 Target 3: {t3:.2f}\n\n"
+                                    f"🛒 NIFTY BUYERS (CALL):\n"
                                     f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
                                     f"• SL: ₹{opt['buyer_sl']:.1f}\n"
                                     f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ OPTION SELLERS (PE SHORT):\n"
+                                    f"🛡️ NIFTY SELLERS (PUT SHORT):\n"
                                     f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
                                     f"• SL: ₹{opt['seller_sl']:.1f}\n"
                                     f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
@@ -668,19 +656,19 @@ while True:
                                 trade_stats['total_signals'] += 1
 
                                 send_telegram_alert(
-                                    f"🔴 NIFTY 50 SELL SIGNAL (BEARISH)\n\n"
-                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"⏰ Time: {current_time_str}\n"
+                                    f"🔴 NIFTY 50 SELL SIGNAL\n\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"⏰ Time: {current_time_str} IST\n"
                                     f"💵 Entry: {current_price:.2f}\n"
-                                    f"🛑 SL: {calc_sl:.2f}\n\n"
-                                    f"🎯 T1: {t1:.2f}\n"
-                                    f"🎯 T2: {t2:.2f}\n"
-                                    f"🎯 T3: {t3:.2f}\n\n"
-                                    f"🛒 OPTION BUYERS (PUT):\n"
+                                    f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
+                                    f"🎯 Target 1: {t1:.2f}\n"
+                                    f"🎯 Target 2: {t2:.2f}\n"
+                                    f"🎯 Target 3: {t3:.2f}\n\n"
+                                    f"🛒 NIFTY BUYERS (PUT):\n"
                                     f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
                                     f"• SL: ₹{opt['buyer_sl']:.1f}\n"
                                     f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ OPTION SELLERS (CE SHORT):\n"
+                                    f"🛡️ NIFTY SELLERS (CALL SHORT):\n"
                                     f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
                                     f"• SL: ₹{opt['seller_sl']:.1f}\n"
                                     f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
