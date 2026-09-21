@@ -211,66 +211,6 @@ def is_today_monthly_expiry():
         
     return today == cur_day
 
-# --- LIVE OPTION CHAIN EXACT PRICING ---
-def get_option_recommendations(index_name, spot_price, signal_direction, spot_risk):
-    step = 50
-    atm_strike = int(round(spot_price / step) * step)
-    delta = 0.50
-
-    buyer_strike_type = "CE" if signal_direction == "BUY" else "PE"
-    seller_strike_type = "PE" if signal_direction == "BUY" else "CE"
-
-    buyer_entry = None
-    seller_entry = None
-
-    try:
-        chain_df = capital_market.live_index_option_chain("NIFTY")
-        if chain_df is not None and not chain_df.empty:
-            col_buyer = f"{buyer_strike_type}_lastPrice" if f"{buyer_strike_type}_lastPrice" in chain_df.columns else f"{buyer_strike_type}_LTP"
-            col_seller = f"{seller_strike_type}_lastPrice" if f"{seller_strike_type}_lastPrice" in chain_df.columns else f"{seller_strike_type}_LTP"
-
-            if col_buyer in chain_df.columns:
-                val = chain_df[chain_df['strikePrice'] == atm_strike][col_buyer].values
-                if len(val) > 0 and float(str(val[0]).replace(',', '')) > 0:
-                    buyer_entry = float(str(val[0]).replace(',', ''))
-
-            if col_seller in chain_df.columns:
-                val_s = chain_df[chain_df['strikePrice'] == atm_strike][col_seller].values
-                if len(val_s) > 0 and float(str(val_s[0]).replace(',', '')) > 0:
-                    seller_entry = float(str(val_s[0]).replace(',', ''))
-    except Exception as e:
-        print(f"Option LTP fetch note: {e}")
-
-    if not buyer_entry:
-        buyer_entry = 115.0
-    if not seller_entry:
-        seller_entry = buyer_entry
-
-    buyer_sl = max(5.0, round(buyer_entry - (spot_risk * delta), 1))
-    buyer_t1 = round(buyer_entry + (spot_risk * 1.417 * delta), 1)
-    buyer_t2 = round(buyer_entry + (spot_risk * 1.889 * delta), 1)
-    buyer_t3 = round(buyer_entry + (spot_risk * 2.834 * delta), 1)
-
-    seller_sl = round(seller_entry + (spot_risk * delta), 1)
-    seller_t1 = max(2.0, round(seller_entry - (spot_risk * 1.417 * delta), 1))
-    seller_t2 = max(2.0, round(seller_entry - (spot_risk * 1.889 * delta), 1))
-    seller_t3 = max(2.0, round(seller_entry - (spot_risk * 2.834 * delta), 1))
-
-    return {
-        "buyer_strike": f"{atm_strike} {buyer_strike_type}",
-        "buyer_entry": buyer_entry,
-        "buyer_sl": buyer_sl,
-        "buyer_t1": buyer_t1,
-        "buyer_t2": buyer_t2,
-        "buyer_t3": buyer_t3,
-        "seller_strike": f"{atm_strike} {seller_strike_type}",
-        "seller_entry": seller_entry,
-        "seller_sl": seller_sl,
-        "seller_t1": seller_t1,
-        "seller_t2": seller_t2,
-        "seller_t3": seller_t3
-    }
-
 # --- DYNAMIC CAMARILLA & VOLATILITY DYNAMICS ---
 def calculate_camarilla_pivots(index_name):
     try:
@@ -605,7 +545,6 @@ while True:
 
                         if trigger_signal:
                             risk = dynamic_risk
-                            opt = get_option_recommendations(idx, current_price, trigger_signal, risk)
 
                             if trigger_signal == "BUY":
                                 t1 = round(current_price + (risk * 1.417), 2)
@@ -630,14 +569,6 @@ while True:
                                     f"🎯 Target 1: {t1:.2f}\n"
                                     f"🎯 Target 2: {t2:.2f}\n"
                                     f"🎯 Target 3: {t3:.2f}\n\n"
-                                    f"🛒 NIFTY BUYERS (CALL):\n"
-                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ NIFTY SELLERS (PUT SHORT):\n"
-                                    f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
                                     f"⚠️ Strictly for educational study only. Not SEBI registered."
                                 )
 
@@ -664,14 +595,6 @@ while True:
                                     f"🎯 Target 1: {t1:.2f}\n"
                                     f"🎯 Target 2: {t2:.2f}\n"
                                     f"🎯 Target 3: {t3:.2f}\n\n"
-                                    f"🛒 NIFTY BUYERS (PUT):\n"
-                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                    f"🛡️ NIFTY SELLERS (CALL SHORT):\n"
-                                    f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                    f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                    f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
                                     f"⚠️ Strictly for educational study only. Not SEBI registered."
                                 )
 
