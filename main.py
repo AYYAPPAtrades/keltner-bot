@@ -116,8 +116,8 @@ if today_date in holiday_dates:
     send_admin_alert(f"🏖️ NSE MARKET HOLIDAY TODAY ({today_str})!\n• Market is closed.")
     exit(0)
 
-INDEX_WATCHLIST = ["NIFTY 50"]
-YF_TICKERS = {"NIFTY 50": "^NSEI"}
+INDEX_WATCHLIST = ["NIFTY 50", "NIFTY BANK"]
+YF_TICKERS = {"NIFTY 50": "^NSEI", "NIFTY BANK": "^NSEBANK"}
 BACKUP_FILE = "daily_active_trades.json"
 EXPIRY_LEDGER_FILE = "expiry_trades_ledger.json"
 
@@ -189,8 +189,8 @@ if restored_trades:
     )
 else:
     send_admin_alert(
-        f"🚀 SAS LEVEL TRACKER LIVE\n\n"
-        f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+        f"🚀 SAS LEVEL PULSE LIVE\n\n"
+        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
         f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
         f"🛡️ Engine Active: 09:00 AM - 03:40 PM"
     )
@@ -212,7 +212,7 @@ def is_today_monthly_expiry():
 
 # --- LIVE OPTION CHAIN EXACT PRICING ---
 def get_option_recommendations(index_name, spot_price, signal_direction, spot_risk):
-    step = 50
+    step = 50 if index_name == "NIFTY 50" else 100
     atm_strike = int(round(spot_price / step) * step)
     delta = 0.50
 
@@ -225,7 +225,7 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
     safe_seller_entry = None
 
     try:
-        symbol = "NIFTY"
+        symbol = "NIFTY" if index_name == "NIFTY 50" else "BANKNIFTY"
         chain_df = capital_market.live_index_option_chain(symbol)
         if chain_df is not None and not chain_df.empty:
             col_buyer = f"{buyer_strike_type}_lastPrice" if f"{buyer_strike_type}_lastPrice" in chain_df.columns else f"{buyer_strike_type}_LTP"
@@ -248,7 +248,7 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         print(f"Option LTP fetch note: {e}")
 
     if not buyer_entry:
-        buyer_entry = 115.0
+        buyer_entry = 115.0 if index_name == "NIFTY 50" else 275.0
     if not seller_entry:
         seller_entry = buyer_entry
     if not safe_seller_entry:
@@ -292,9 +292,9 @@ def calculate_camarilla_pivots(index_name):
             diff = high - low
             pivot = (high + low + close) / 3.0
 
-            base_risk = round(diff * 0.125, 2)
-            min_risk = 18.0
-            max_risk = 35.0
+            base_risk = round(diff * (0.125 if index_name == "NIFTY 50" else 0.145), 2)
+            min_risk = 18.0 if index_name == "NIFTY 50" else 45.0
+            max_risk = 35.0 if index_name == "NIFTY 50" else 85.0
             dynamic_sl_risk = max(min_risk, min(base_risk, max_risk))
 
             return {
@@ -320,12 +320,12 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     elements = []
 
     title_style = ParagraphStyle('RepTitle', parent=styles['Heading1'], fontSize=14, leading=17, textColor=colors.HexColor("#1A365D"), alignment=1)
-    elements.append(Paragraph(f"SAS LEVEL TRACKER - {title_text}", title_style))
+    elements.append(Paragraph(f"SAS LEVEL PULSE - {title_text}", title_style))
     pnl_status_text = f"NET POINTS: +{total_pnl:.2f} Pts" if total_pnl >= 0 else f"NET POINTS: {total_pnl:.2f} Pts"
-    elements.append(Paragraph(f"Model: {STRATEGY_DISPLAY_NAME} | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
+    elements.append(Paragraph(f"Strategy: {STRATEGY_DISPLAY_NAME} | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
     elements.append(Spacer(1, 10))
 
-    headers = ["SL", "Date", "Index & Type", "Entry & Time", "Level 1", "Level 2", "Level 3", "Threshold", "Points", "Status"]
+    headers = ["SL", "Date", "Index & Type", "Entry & Time", "Target 1", "Target 2", "Target 3", "Stop Loss", "Points", "Status"]
     table_rows = [headers]
 
     for i, l in enumerate(logs, 1):
@@ -385,24 +385,23 @@ while True:
             open_alert_sent = True
             send_telegram_alert(
                 f"🔔 PRE-MARKET TRACKER ONLINE (09:00 AM)\n\n"
-                f"📍 Channel: SAS LEVEL TRACKER\n"
-                f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                 f"📅 Date: {today_date_str}\n"
-                f"🛡️ Algorithmic calculation levels stream commences at 09:15 AM IST."
+                f"🛡️ Dynamic levels stream commences at 09:15 AM IST."
             )
 
         if not pivots_alert_sent and (pivot_alert_time <= current_time < start_trade_time):
             pivots_alert_sent = True
-            p_msg = f"📐 DAILY MATHEMATICAL LEVELS (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n\n"
+            p_msg = f"📐 DAILY LEVELS (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
             for idx in INDEX_WATCHLIST:
                 lvl = camarilla_levels.get(idx)
                 if lvl:
-                    p_msg += f"🔹 {idx}\n• Central Pivot: {lvl['Pivot']:.2f}\n• R4: {lvl['R4']:.2f} | R3: {lvl['R3']:.2f}\n• S3: {lvl['S3']:.2f} | S4: {lvl['S4']:.2f}\n• Day Risk: {lvl['Dynamic_Risk']:.2f} Pts\n\n"
+                    p_msg += f"🔹 {idx}\n• Pivot: {lvl['Pivot']:.2f}\n• R4: {lvl['R4']:.2f} | R3: {lvl['R3']:.2f}\n• S3: {lvl['S3']:.2f} | S4: {lvl['S4']:.2f}\n• Day Risk: {lvl['Dynamic_Risk']:.2f} Pts\n\n"
             send_telegram_alert(p_msg)
 
         if current_time >= exit_alert_time and not eod_alert_sent:
             eod_alert_sent = True
-            send_telegram_alert("⚠️ INTRADAY AUTO-EXIT (03:25 PM)\n\n• Market closing soon.\n• Closing all open active positions.")
+            send_telegram_alert("⚠️ INTRADAY AUTO-EXIT (03:25 PM)\n\n• Market closing soon.\n• Closing open positions.")
             for idx in INDEX_WATCHLIST:
                 trade = active_trades[idx]
                 if trade is not None:
@@ -412,7 +411,7 @@ while True:
                     trade['pnl'] = pnl
                     trade['status'] = 'EOD Auto-Exit (03:25 PM)'
                     record_to_expiry_ledger(trade)
-                    send_telegram_alert(f"🏁 POSITION SQUARED OFF ({idx})\n• Points: {pnl:+.2f} Pts\n• Status: Intraday Auto-Exit")
+                    send_telegram_alert(f"🏁 AUTO EXIT ({idx})\n• PnL: {pnl:+.2f} Pts\n• Status: Market Closing Exit")
                     active_trades[idx] = None
             save_state(active_trades)
 
@@ -424,14 +423,14 @@ while True:
             # 1. DAILY REPORT
             daily_pnl = sum(r.get('pnl', 0.0) for r in daily_completed_trades)
             daily_summary = (
-                f"📊 DAILY PERFORMANCE SUMMARY (03:40 PM)\n\n"
+                f"📊 DAILY PERFORMANCE REPORT (03:40 PM)\n\n"
                 f"📅 Date: {today_date_str}\n"
-                f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                f"• Today Level Triggers: {len(daily_completed_trades)}\n"
-                f"• Level 1 Hits: {trade_stats['target_hits']}\n"
-                f"• Threshold Touch: {trade_stats['sl_hits']}\n\n"
-                f"📈 Day Net Points: {daily_pnl:+.2f} Pts\n\n"
-                f"Dispatching Daily Analytical PDF..."
+                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                f"• Total Trades: {len(daily_completed_trades)}\n"
+                f"• Targets Hit: {trade_stats['target_hits']}\n"
+                f"• Stop Loss Hit: {trade_stats['sl_hits']}\n\n"
+                f"📈 Net Points: {daily_pnl:+.2f} Pts\n\n"
+                f"Dispatching Daily PDF..."
             )
             send_telegram_alert(daily_summary)
 
@@ -444,19 +443,19 @@ while True:
             if today_is_monthly:
                 total_pnl = sum(r.get('pnl', 0.0) for r in records)
                 monthly_summary = (
-                    f"🏆 MONTHLY EXPIRY CYCLE REPORT (03:40 PM)\n\n"
+                    f"🏆 MONTHLY EXPIRY REPORT (03:40 PM)\n\n"
                     f"📅 Expiry Date: {today_date_str}\n"
-                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                    f"• Month Cycle Total Crossovers: {len(records)}\n\n"
+                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                    f"• Month Total Trades: {len(records)}\n\n"
                     f"📈 Net Cycle Points: {total_pnl:+.2f} Pts\n\n"
-                    f"Dispatching Complete Expiry Ledger PDF..."
+                    f"Dispatching Expiry Ledger PDF..."
                 )
                 send_telegram_alert(monthly_summary)
 
                 expiry_pdf = f"Monthly_Expiry_Report_{today_date_str}.pdf"
-                generate_pdf_report(expiry_pdf, "MONTHLY EXPIRY CYCLE REPORT", today_date_str, records, total_pnl)
-                send_telegram_document(expiry_pdf, caption=f"📄 Monthly Expiry Report ({today_date_str}) | Final: {total_pnl:+.2f} Pts")
-                send_email_with_pdf(expiry_pdf, f"Monthly Expiry Report - {today_date_str}", monthly_summary)
+                generate_pdf_report(expiry_pdf, "MONTHLY EXPIRY REPORT", today_date_str, records, total_pnl)
+                send_telegram_document(expiry_pdf, caption=f"📄 Monthly Report ({today_date_str}) | Final: {total_pnl:+.2f} Pts")
+                send_email_with_pdf(expiry_pdf, f"Monthly Report - {today_date_str}", monthly_summary)
 
                 clear_expiry_ledger()
             break
@@ -483,12 +482,18 @@ while True:
                                 pnl = current_price - trade['entry']
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Threshold Exit'
+                                trade['status'] = 'Stop Loss Hit'
                                 record_to_expiry_ledger(trade)
                                 
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 THRESHOLD REACHED\n📍 Index: {idx} (CALL)\n💵 Reference Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
+                                    send_telegram_alert(
+                                        f"🛑 STOP LOSS HIT!\n"
+                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                        f"Index: {idx} (CALL)\n"
+                                        f"💵 Stop Loss: {trade['sl']:.2f}\n"
+                                        f"Exit Price: {current_price:.2f}"
+                                    )
                                 
                                 active_trades[idx] = None
                                 save_state(active_trades)
@@ -500,9 +505,11 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t1']:.2f}\n"
-                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
+                                    f"🎯 TARGET 1 HIT!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n"
+                                    f"💵 Target Price: {trade['t1']:.2f}\n"
+                                    f"Current: {current_price:.2f}"
                                 )
 
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price >= trade['t2']:
@@ -510,8 +517,10 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t2']:.2f}\n"
+                                    f"🎯 TARGET 2 HIT!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n"
+                                    f"💵 Target Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
@@ -520,12 +529,14 @@ while True:
                                 pnl = current_price - trade['entry']
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Level 3 Achieved'
+                                trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t3']:.2f}\n"
-                                    f"Current: {current_price:.2f}"
+                                    f"🏆 TARGET 3 ACHIEVED!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n"
+                                    f"💵 Final Target: {trade['t3']:.2f}\n"
+                                    f"Trade Completed."
                                 )
                                 active_trades[idx] = None
                                 save_state(active_trades)
@@ -537,12 +548,18 @@ while True:
                                 pnl = trade['entry'] - current_price
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Threshold Exit'
+                                trade['status'] = 'Stop Loss Hit'
                                 record_to_expiry_ledger(trade)
                                 
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 THRESHOLD REACHED\n📍 Index: {idx} (PUT)\n💵 Reference Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
+                                    send_telegram_alert(
+                                        f"🛑 STOP LOSS HIT!\n"
+                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                        f"Index: {idx} (PUT)\n"
+                                        f"💵 Stop Loss: {trade['sl']:.2f}\n"
+                                        f"Exit Price: {current_price:.2f}"
+                                    )
                                 
                                 active_trades[idx] = None
                                 save_state(active_trades)
@@ -554,9 +571,11 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t1']:.2f}\n"
-                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
+                                    f"🎯 TARGET 1 HIT!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n"
+                                    f"💵 Target Price: {trade['t1']:.2f}\n"
+                                    f"Current: {current_price:.2f}"
                                 )
 
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price <= trade['t2']:
@@ -564,8 +583,10 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t2']:.2f}\n"
+                                    f"🎯 TARGET 2 HIT!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n"
+                                    f"💵 Target Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
@@ -574,12 +595,14 @@ while True:
                                 pnl = trade['entry'] - current_price
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Level 3 Achieved'
+                                trade['status'] = 'Target 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 LEVEL 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t3']:.2f}\n"
-                                    f"Current: {current_price:.2f}"
+                                    f"🏆 TARGET 3 ACHIEVED!\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n"
+                                    f"💵 Final Target: {trade['t3']:.2f}\n"
+                                    f"Trade Completed."
                                 )
                                 active_trades[idx] = None
                                 save_state(active_trades)
@@ -628,17 +651,16 @@ while True:
                                 trade_stats['total_signals'] += 1
 
                                 send_telegram_alert(
-                                    f"🟢 {idx} LEVEL CROSSOVER (BULLISH)\n\n"
-                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"🟢 {idx} BUY SIGNAL (BUY CALL)\n\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                                     f"⏰ Time: {current_time_str}\n"
-                                    f"💵 Reference Entry: {current_price:.2f}\n"
-                                    f"🛑 Safe Reference Threshold: {calc_sl:.2f}\n\n"
-                                    f"🎯 Level 1: {t1:.2f}\n"
-                                    f"🎯 Level 2: {t2:.2f}\n"
-                                    f"🎯 Level 3: {t3:.2f}\n\n"
-                                    f"📚 STUDY CONTRACT (CALL REFERENCE):\n"
+                                    f"💵 Spot Entry: {current_price:.2f} | SL: {calc_sl:.2f}\n\n"
+                                    f"🎯 Target 1: {t1:.2f}\n"
+                                    f"🎯 Target 2: {t2:.2f}\n"
+                                    f"🎯 Target 3: {t3:.2f}\n\n"
+                                    f"🛒 OPTION STUDY (CALL):\n"
                                     f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• Thresh: ₹{opt['buyer_sl']:.1f} | L1: ₹{opt['buyer_t1']:.1f}\n\n"
+                                    f"• Option SL: ₹{opt['buyer_sl']:.1f} | T1: ₹{opt['buyer_t1']:.1f}\n\n"
                                     f"⚠️ Strictly for educational study only. Not SEBI registered."
                                 )
 
@@ -657,17 +679,16 @@ while True:
                                 trade_stats['total_signals'] += 1
 
                                 send_telegram_alert(
-                                    f"🔴 {idx} LEVEL CROSSOVER (BEARISH)\n\n"
-                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"🔴 {idx} SELL SIGNAL (BUY PUT)\n\n"
+                                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                                     f"⏰ Time: {current_time_str}\n"
-                                    f"💵 Reference Entry: {current_price:.2f}\n"
-                                    f"🛑 Safe Reference Threshold: {calc_sl:.2f}\n\n"
-                                    f"🎯 Level 1: {t1:.2f}\n"
-                                    f"🎯 Level 2: {t2:.2f}\n"
-                                    f"🎯 Level 3: {t3:.2f}\n\n"
-                                    f"📚 STUDY CONTRACT (PUT REFERENCE):\n"
+                                    f"💵 Spot Entry: {current_price:.2f} | SL: {calc_sl:.2f}\n\n"
+                                    f"🎯 Target 1: {t1:.2f}\n"
+                                    f"🎯 Target 2: {t2:.2f}\n"
+                                    f"🎯 Target 3: {t3:.2f}\n\n"
+                                    f"🛒 OPTION STUDY (PUT):\n"
                                     f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                    f"• Thresh: ₹{opt['buyer_sl']:.1f} | L1: ₹{opt['buyer_t1']:.1f}\n\n"
+                                    f"• Option SL: ₹{opt['buyer_sl']:.1f} | T1: ₹{opt['buyer_t1']:.1f}\n\n"
                                     f"⚠️ Strictly for educational study only. Not SEBI registered."
                                 )
 
