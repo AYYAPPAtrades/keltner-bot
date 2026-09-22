@@ -23,10 +23,10 @@ logger = logging.getLogger("SAS_TRACKER")
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Credentials & Bot Tokens
+# Credentials & Bot Tokens (Updated with new token and admin chat ID)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftyfivtybankniftylivetrade")
-TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6677937397")
+TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
 
 # Watchlist & Tickers (NIFTY 50 Only)
 INDEX_WATCHLIST = ["NIFTY 50"]
@@ -43,6 +43,7 @@ telegram_session = requests.Session()
 # ==========================================
 def send_telegram_alert(message, parse_mode="HTML", chat_id=None):
     if not TELEGRAM_BOT_TOKEN:
+        print("[TELEGRAM ERROR] Bot token missing!", flush=True)
         return
     targets = [chat_id] if chat_id else [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
     for cid in targets:
@@ -51,9 +52,10 @@ def send_telegram_alert(message, parse_mode="HTML", chat_id=None):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
         try:
-            telegram_session.post(url, json=payload, timeout=5)
+            res = telegram_session.post(url, json=payload, timeout=8)
+            print(f"[TELEGRAM] To: {cid} | Code: {res.status_code} | Msg: {res.text}", flush=True)
         except Exception as e:
-            logger.error(f"Telegram delivery error to {cid}: {e}")
+            print(f"[TELEGRAM EXCEPTION] To: {cid} | Error: {e}", flush=True)
 
 # ==========================================
 # 3. STATE & LEDGER MANAGEMENT
