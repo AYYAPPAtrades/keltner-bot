@@ -24,8 +24,8 @@ logger = logging.getLogger("SAS_TRACKER")
 IST = pytz.timezone("Asia/Kolkata")
 
 # Credentials & Bot Tokens
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAHYL_srWzPSWCZR5aJe_tM0fD24HblsL_Q")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftyfivtybankniftylivetrade")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAHYL_srWzPSWCZR5aJe_tM0fD24HblsL_Q)
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftylivevetrade")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6677937397")
 
 # Watchlist & Tickers (NIFTY 50 Only)
