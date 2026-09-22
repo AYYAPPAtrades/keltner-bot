@@ -148,6 +148,17 @@ def fetch_atm_options(spot_price):
 # ==========================================
 def main():
     logger.info("Initializing SAS Level Pulse Bot...")
+
+    # --- BOT STARTUP ALERT (ADMIN ONLY) ---
+    startup_msg = (
+        f"🚀 <b>SAS LEVEL PULSE LIVE</b>\n\n"
+        f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
+        f"📊 <b>Index:</b> NIFTY 50\n"
+        f"🕒 <b>Time:</b> {datetime.now(IST).strftime('%I:%M:%S %p')} IST\n"
+        f"🛡️ <b>Engine Status:</b> Running & Monitoring Active."
+    )
+    send_telegram_alert(startup_msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
+
     high, low, close = fetch_previous_ohlc()
     if not high:
         logger.error("Failed to obtain previous session OHLC. Retrying on next loop.")
@@ -159,12 +170,13 @@ def main():
     levels_posted = False
     active_trade = load_backup_state()
     prev_tick = None
+    last_heartbeat_hour = -1
 
     while True:
         now = datetime.now(IST)
         current_time = now.time()
 
-        # 09:05 AM - Levels Alert
+        # 09:05 AM - Levels Alert (ADMIN ONLY)
         if current_time >= dtime(9, 5) and not levels_posted:
             msg = (
                 f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
@@ -178,7 +190,7 @@ def main():
                 f"<i>Tracking live tick-by-tick momentum.</i>\n"
                 f"⚠️ <i>Strictly for educational study only. Not SEBI registered.</i>"
             )
-            send_telegram_alert(msg)
+            send_telegram_alert(msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
             levels_posted = True
 
         # 09:15 to 15:25 - Active Scanning & Monitoring
@@ -186,7 +198,7 @@ def main():
             current_tick = get_live_tick()
             if current_tick and prev_tick:
                 # -----------------------------------------------
-                # SCENARIO A: MONITOR ACTIVE TRADE
+                # SCENARIO A: MONITOR ACTIVE TRADE (PUBLIC + ADMIN)
                 # -----------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
@@ -278,7 +290,7 @@ def main():
                             save_daily_state(None)
 
                 # -----------------------------------------------
-                # SCENARIO B: SCAN FOR NEW TRADES (Breakout & Reversal)
+                # SCENARIO B: SCAN FOR NEW TRADES (PUBLIC + ADMIN)
                 # -----------------------------------------------
                 if active_trade is None:
                     trigger = None
@@ -359,10 +371,22 @@ def main():
                         )
                         send_telegram_alert(msg)
 
+                # --- HOURLY STATUS ALERT (ADMIN ONLY) ---
+                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
+                    last_heartbeat_hour = now.hour
+                    diff = current_tick - close
+                    pct = (diff / close) * 100 if close != 0 else 0.0
+                    hb_msg = (
+                        f"💓 <b>HOURLY STATUS ALERT</b>\n"
+                        f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n\n"
+                        f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
+                    )
+                    send_telegram_alert(hb_msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
+
             if current_tick:
                 prev_tick = current_tick
 
-        # 03:25 PM - Auto-Square Off (EOD Exit)
+        # 03:25 PM - Auto-Square Off (PUBLIC + ADMIN)
         if current_time >= dtime(15, 25) and active_trade is not None:
             active_trade["status"] = "EOD Auto-Exit"
             record_trade_to_ledger(active_trade)
