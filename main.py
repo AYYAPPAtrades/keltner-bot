@@ -116,7 +116,6 @@ if today_date in holiday_dates:
     send_admin_alert(f"🏖️ NSE MARKET HOLIDAY TODAY ({today_str})!\n• Market is closed.")
     exit(0)
 
-# ONLY NIFTY 50
 INDEX_WATCHLIST = ["NIFTY 50"]
 YF_TICKERS = {"NIFTY 50": "^NSEI"}
 BACKUP_FILE = "daily_active_trades.json"
@@ -219,12 +218,15 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
 
     buyer_strike_type = "CE" if signal_direction == "BUY" else "PE"
     seller_strike_type = "PE" if signal_direction == "BUY" else "CE"
+    safe_seller_strike_val = (atm_strike - step) if signal_direction == "BUY" else (atm_strike + step)
 
     buyer_entry = None
     seller_entry = None
+    safe_seller_entry = None
 
     try:
-        chain_df = capital_market.live_index_option_chain("NIFTY")
+        symbol = "NIFTY"
+        chain_df = capital_market.live_index_option_chain(symbol)
         if chain_df is not None and not chain_df.empty:
             col_buyer = f"{buyer_strike_type}_lastPrice" if f"{buyer_strike_type}_lastPrice" in chain_df.columns else f"{buyer_strike_type}_LTP"
             col_seller = f"{seller_strike_type}_lastPrice" if f"{seller_strike_type}_lastPrice" in chain_df.columns else f"{seller_strike_type}_LTP"
@@ -238,6 +240,10 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
                 val_s = chain_df[chain_df['strikePrice'] == atm_strike][col_seller].values
                 if len(val_s) > 0 and float(str(val_s[0]).replace(',', '')) > 0:
                     seller_entry = float(str(val_s[0]).replace(',', ''))
+
+                val_safe = chain_df[chain_df['strikePrice'] == safe_seller_strike_val][col_seller].values
+                if len(val_safe) > 0 and float(str(val_safe[0]).replace(',', '')) > 0:
+                    safe_seller_entry = float(str(val_safe[0]).replace(',', ''))
     except Exception as e:
         print(f"Option LTP fetch note: {e}")
 
@@ -245,6 +251,8 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         buyer_entry = 115.0
     if not seller_entry:
         seller_entry = buyer_entry
+    if not safe_seller_entry:
+        safe_seller_entry = round(seller_entry * 0.65, 1)
 
     buyer_sl = max(5.0, round(buyer_entry - (spot_risk * delta), 1))
     buyer_t1 = round(buyer_entry + (spot_risk * 1.417 * delta), 1)
@@ -252,9 +260,7 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
     buyer_t3 = round(buyer_entry + (spot_risk * 2.834 * delta), 1)
 
     seller_sl = round(seller_entry + (spot_risk * delta), 1)
-    seller_t1 = max(2.0, round(seller_entry - (spot_risk * 1.417 * delta), 1))
-    seller_t2 = max(2.0, round(seller_entry - (spot_risk * 1.889 * delta), 1))
-    seller_t3 = max(2.0, round(seller_entry - (spot_risk * 2.834 * delta), 1))
+    seller_target = max(2.0, round(seller_entry - (spot_risk * 1.0 * delta), 1))
 
     return {
         "buyer_strike": f"{atm_strike} {buyer_strike_type}",
@@ -266,9 +272,9 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         "seller_strike": f"{atm_strike} {seller_strike_type}",
         "seller_entry": seller_entry,
         "seller_sl": seller_sl,
-        "seller_t1": seller_t1,
-        "seller_t2": seller_t2,
-        "seller_t3": seller_t3
+        "seller_target": seller_target,
+        "safe_seller_strike": f"{safe_seller_strike_val} {seller_strike_type}",
+        "safe_seller_entry": safe_seller_entry
     }
 
 # --- DYNAMIC CAMARILLA & VOLATILITY DYNAMICS ---
@@ -474,24 +480,16 @@ while True:
                         # --- BUY POSITION MONITORING ---
                         if trade['type'] == 'BUY':
                             if current_price <= trade['sl']:
-                                if trade.get('t2_hit'):
-                                    pnl = trade['t2'] - trade['entry']
-                                    trade['status'] = 'Target 2 Achieved'
-                                elif trade.get('t1_hit'):
-                                    pnl = trade['t1'] - trade['entry']
-                                    trade['status'] = 'Target 1 Achieved'
-                                else:
-                                    pnl = current_price - trade['entry']
-                                    trade['status'] = 'Stop Loss Hit'
-
+                                pnl = current_price - trade['entry']
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
+                                trade['status'] = 'Threshold Exit'
                                 record_to_expiry_ledger(trade)
-
+                                
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 STOP LOSS HIT\n📍 Index: {idx} (CALL)\n💵 Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
-
+                                    send_telegram_alert(f"🛑 THRESHOLD REACHED\n📍 Index: {idx} (CALL)\n💵 Reference Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
+                                
                                 active_trades[idx] = None
                                 save_state(active_trades)
                                 continue
@@ -502,9 +500,9 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 1 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t1']:.2f}\n"
-                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). T2 & T3 Active!"
+                                    f"🎯 LEVEL 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t1']:.2f}\n"
+                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
                                 )
 
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price >= trade['t2']:
@@ -512,21 +510,21 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 2 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t2']:.2f}\n"
+                                    f"🎯 LEVEL 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
                             if trade.get('t2_hit') and current_price >= trade['t3']:
                                 trade['t3_hit'] = True
-                                pnl = trade['t3'] - trade['entry']
-                                trade['exit_price'] = trade['t3']
+                                pnl = current_price - trade['entry']
+                                trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Target 3 Achieved'
+                                trade['status'] = 'Level 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 3 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (CALL)\n💵 Target Price: {trade['t3']:.2f}\n"
+                                    f"🎯 LEVEL 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (CALL)\n💵 Level Price: {trade['t3']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
                                 active_trades[idx] = None
@@ -536,24 +534,16 @@ while True:
                         # --- SELL POSITION MONITORING ---
                         elif trade['type'] == 'SELL':
                             if current_price >= trade['sl']:
-                                if trade.get('t2_hit'):
-                                    pnl = trade['entry'] - trade['t2']
-                                    trade['status'] = 'Target 2 Achieved'
-                                elif trade.get('t1_hit'):
-                                    pnl = trade['entry'] - trade['t1']
-                                    trade['status'] = 'Target 1 Achieved'
-                                else:
-                                    pnl = trade['entry'] - current_price
-                                    trade['status'] = 'Stop Loss Hit'
-
+                                pnl = trade['entry'] - current_price
                                 trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
+                                trade['status'] = 'Threshold Exit'
                                 record_to_expiry_ledger(trade)
-
+                                
                                 if not trade.get('t1_hit'):
                                     trade_stats['sl_hits'] += 1
-                                    send_telegram_alert(f"🛑 STOP LOSS HIT\n📍 Index: {idx} (PUT)\n💵 Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
-
+                                    send_telegram_alert(f"🛑 THRESHOLD REACHED\n📍 Index: {idx} (PUT)\n💵 Reference Exit: {current_price:.2f}\n⏰ Time: {current_time_str}")
+                                
                                 active_trades[idx] = None
                                 save_state(active_trades)
                                 continue
@@ -564,9 +554,9 @@ while True:
                                 trade_stats['target_hits'] += 1
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 1 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t1']:.2f}\n"
-                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). T2 & T3 Active!"
+                                    f"🎯 LEVEL 1 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t1']:.2f}\n"
+                                    f"Current: {current_price:.2f}\n🛡️ Trailing SL moved to Cost ({trade['entry']:.2f}). L2 & L3 Active!"
                                 )
 
                             if trade.get('t1_hit') and not trade.get('t2_hit') and current_price <= trade['t2']:
@@ -574,32 +564,32 @@ while True:
                                 trade['sl'] = trade['t1']
                                 save_state(active_trades)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 2 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t2']:.2f}\n"
+                                    f"🎯 LEVEL 2 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t2']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
 
                             if trade.get('t2_hit') and current_price <= trade['t3']:
                                 trade['t3_hit'] = True
-                                pnl = trade['entry'] - trade['t3']
-                                trade['exit_price'] = trade['t3']
+                                pnl = trade['entry'] - current_price
+                                trade['exit_price'] = current_price
                                 trade['pnl'] = pnl
-                                trade['status'] = 'Target 3 Achieved'
+                                trade['status'] = 'Level 3 Achieved'
                                 record_to_expiry_ledger(trade)
                                 send_telegram_alert(
-                                    f"🎯 TARGET 3 HIT!\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                    f"Index: {idx} (PUT)\n💵 Target Price: {trade['t3']:.2f}\n"
+                                    f"🎯 LEVEL 3 HIT!\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"Index: {idx} (PUT)\n💵 Level Price: {trade['t3']:.2f}\n"
                                     f"Current: {current_price:.2f}"
                                 )
                                 active_trades[idx] = None
                                 save_state(active_trades)
                                 continue
 
-                    # --- LEVEL CROSSOVER & REVERSAL TRIGGER ---
+                    # --- LEVEL CROSSOVER TRIGGER ---
                     pivots = camarilla_levels.get(idx)
                     can_trade = (start_trade_time <= current_time < exit_alert_time)
 
-                    if can_trade and pivots is not None:
+                    if can_trade and active_trades[idx] is None and pivots is not None:
                         r4, s4, pp = pivots['R4'], pivots['S4'], pivots['Pivot']
                         dynamic_risk = pivots['Dynamic_Risk']
 
@@ -620,112 +610,66 @@ while True:
                             calc_sl = round(current_price + dynamic_risk, 2)
 
                         if trigger_signal:
-                            active_t = active_trades[idx]
-                            
-                            # ഓപ്പോസിറ്റ് റിവേഴ്സൽ വന്നാൽ മുൻപത്തെ ട്രേഡ് എക്സിറ്റ് ചെയ്യൽ
-                            if active_t is not None and active_t['type'] != trigger_signal:
-                                if active_t['type'] == 'BUY':
-                                    rev_pnl = current_price - active_t['entry']
-                                    pos_name = "NIFTY 50 (CALL)"
-                                else:
-                                    rev_pnl = active_t['entry'] - current_price
-                                    pos_name = "NIFTY 50 (PUT)"
+                            risk = dynamic_risk
+                            opt = get_option_recommendations(idx, current_price, trigger_signal, risk)
 
-                                if active_t.get('t2_hit'):
-                                    rev_status = "T2 Achieved (Closed in Profit)"
-                                elif active_t.get('t1_hit'):
-                                    rev_status = "T1 Achieved (Closed in Profit / Cost)"
-                                else:
-                                    rev_status = "Closed before SL due to Reversal"
+                            if trigger_signal == "BUY":
+                                t1 = round(current_price + (risk * 1.417), 2)
+                                t2 = round(current_price + (risk * 1.889), 2)
+                                t3 = round(current_price + (risk * 2.834), 2)
 
-                                active_t['exit_price'] = current_price
-                                active_t['pnl'] = rev_pnl
-                                active_t['status'] = rev_status
-                                record_to_expiry_ledger(active_t)
+                                active_trades[idx] = {
+                                    'date': today_date_str, 'index': idx, 'type': 'BUY',
+                                    'entry': current_price, 'entry_time': current_time_str,
+                                    'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
+                                    't1_hit': False, 't2_hit': False, 't3_hit': False
+                                }
+                                save_state(active_trades)
+                                trade_stats['total_signals'] += 1
 
                                 send_telegram_alert(
-                                    f"🔄 REVERSAL EXIT (PREVIOUS TRADE)\n"
-                                    f"📍 Index: {pos_name}\n"
-                                    f"💵 Exit Price: {current_price:.2f}\n"
-                                    f"✅ Status: {rev_status}\n"
-                                    f"📊 P/L: {rev_pnl:+.2f} Pts\n"
-                                    f"⚠️ Market trend reversed. Taking opposite position!"
+                                    f"🟢 {idx} LEVEL CROSSOVER (BULLISH)\n\n"
+                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"⏰ Time: {current_time_str}\n"
+                                    f"💵 Reference Entry: {current_price:.2f}\n"
+                                    f"🛑 Safe Reference Threshold: {calc_sl:.2f}\n\n"
+                                    f"🎯 Level 1: {t1:.2f}\n"
+                                    f"🎯 Level 2: {t2:.2f}\n"
+                                    f"🎯 Level 3: {t3:.2f}\n\n"
+                                    f"📚 STUDY CONTRACT (CALL REFERENCE):\n"
+                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
+                                    f"• Thresh: ₹{opt['buyer_sl']:.1f} | L1: ₹{opt['buyer_t1']:.1f}\n\n"
+                                    f"⚠️ Strictly for educational study only. Not SEBI registered."
                                 )
-                                active_trades[idx] = None
-                                active_t = None
 
-                            # പുതിയ എൻട്രി അല്ലെങ്കിൽ റിവേഴ്സൽ എൻട്രി എടുക്കൽ
-                            if active_trades[idx] is None:
-                                risk = dynamic_risk
-                                opt = get_option_recommendations(idx, current_price, trigger_signal, risk)
+                            elif trigger_signal == "SELL":
+                                t1 = round(current_price - (risk * 1.417), 2)
+                                t2 = round(current_price - (risk * 1.889), 2)
+                                t3 = round(current_price - (risk * 2.834), 2)
 
-                                if trigger_signal == "BUY":
-                                    t1 = round(current_price + (risk * 1.417), 2)
-                                    t2 = round(current_price + (risk * 1.889), 2)
-                                    t3 = round(current_price + (risk * 2.834), 2)
+                                active_trades[idx] = {
+                                    'date': today_date_str, 'index': idx, 'type': 'SELL',
+                                    'entry': current_price, 'entry_time': current_time_str,
+                                    'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
+                                    't1_hit': False, 't2_hit': False, 't3_hit': False
+                                }
+                                save_state(active_trades)
+                                trade_stats['total_signals'] += 1
 
-                                    active_trades[idx] = {
-                                        'date': today_date_str, 'index': idx, 'type': 'BUY',
-                                        'entry': current_price, 'entry_time': current_time_str,
-                                        'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
-                                        't1_hit': False, 't2_hit': False, 't3_hit': False
-                                    }
-                                    save_state(active_trades)
-                                    trade_stats['total_signals'] += 1
-
-                                    send_telegram_alert(
-                                        f"🟢 NIFTY 50 BUY SIGNAL\n\n"
-                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                        f"⏰ Time: {current_time_str} IST\n"
-                                        f"💵 Entry: {current_price:.2f}\n"
-                                        f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
-                                        f"🎯 Target 1: {t1:.2f}\n"
-                                        f"🎯 Target 2: {t2:.2f}\n"
-                                        f"🎯 Target 3: {t3:.2f}\n\n"
-                                        f"🛒 NIFTY BUYERS (CALL):\n"
-                                        f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                        f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                        f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                        f"🛡️ NIFTY SELLERS (PUT SHORT):\n"
-                                        f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                        f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                        f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
-                                        f"⚠️ Strictly for educational study only. Not SEBI registered."
-                                    )
-
-                                elif trigger_signal == "SELL":
-                                    t1 = round(current_price - (risk * 1.417), 2)
-                                    t2 = round(current_price - (risk * 1.889), 2)
-                                    t3 = round(current_price - (risk * 2.834), 2)
-
-                                    active_trades[idx] = {
-                                        'date': today_date_str, 'index': idx, 'type': 'SELL',
-                                        'entry': current_price, 'entry_time': current_time_str,
-                                        'sl': calc_sl, 't1': t1, 't2': t2, 't3': t3,
-                                        't1_hit': False, 't2_hit': False, 't3_hit': False
-                                    }
-                                    save_state(active_trades)
-                                    trade_stats['total_signals'] += 1
-
-                                    send_telegram_alert(
-                                        f"🔴 NIFTY 50 SELL SIGNAL\n\n"
-                                        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                                        f"⏰ Time: {current_time_str} IST\n"
-                                        f"💵 Entry: {current_price:.2f}\n"
-                                        f"🛑 Stop Loss: {calc_sl:.2f}\n\n"
-                                        f"🎯 Target 1: {t1:.2f}\n"
-                                        f"🎯 Target 2: {t2:.2f}\n"
-                                        f"🎯 Target 3: {t3:.2f}\n\n"
-                                        f"🛒 NIFTY BUYERS (PUT):\n"
-                                        f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
-                                        f"• SL: ₹{opt['buyer_sl']:.1f}\n"
-                                        f"• T1: ₹{opt['buyer_t1']:.1f} | T2: ₹{opt['buyer_t2']:.1f} | T3: ₹{opt['buyer_t3']:.1f}\n\n"
-                                        f"🛡️ NIFTY SELLERS (CALL SHORT):\n"
-                                        f"• Strike: {opt['seller_strike']} @ ₹{opt['seller_entry']:.1f}\n"
-                                        f"• SL: ₹{opt['seller_sl']:.1f}\n"
-                                        f"• T1: ₹{opt['seller_t1']:.1f} | T2: ₹{opt['seller_t2']:.1f} | T3: ₹{opt['seller_t3']:.1f}\n\n"
-                                        f"⚠️ Strictly for educational study only. Not SEBI registered."
-                                    )
+                                send_telegram_alert(
+                                    f"🔴 {idx} LEVEL CROSSOVER (BEARISH)\n\n"
+                                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                                    f"⏰ Time: {current_time_str}\n"
+                                    f"💵 Reference Entry: {current_price:.2f}\n"
+                                    f"🛑 Safe Reference Threshold: {calc_sl:.2f}\n\n"
+                                    f"🎯 Level 1: {t1:.2f}\n"
+                                    f"🎯 Level 2: {t2:.2f}\n"
+                                    f"🎯 Level 3: {t3:.2f}\n\n"
+                                    f"📚 STUDY CONTRACT (PUT REFERENCE):\n"
+                                    f"• Strike: {opt['buyer_strike']} @ ₹{opt['buyer_entry']:.1f}\n"
+                                    f"• Thresh: ₹{opt['buyer_sl']:.1f} | L1: ₹{opt['buyer_t1']:.1f}\n\n"
+                                    f"⚠️ Strictly for educational study only. Not SEBI registered."
+                                )
 
                     last_tick_prices[idx] = current_price
 
