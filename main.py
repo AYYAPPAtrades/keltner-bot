@@ -25,7 +25,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # Credentials & Bot Tokens
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAHYL_srWzPSWCZR5aJe_tM0fD24HblsL_Q")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftylivevetrade")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftyfivtybankniftylivetrade")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6677937397")
 
 # Watchlist & Tickers (NIFTY 50 Only)
@@ -51,9 +51,9 @@ def send_telegram_alert(message, parse_mode="HTML", chat_id=None):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
         try:
-            telegram_session.post(url, json=payload, timeout=4)
+            telegram_session.post(url, json=payload, timeout=5)
         except Exception as e:
-            logger.error(f"Telegram alert delivery error to {cid}: {e}")
+            logger.error(f"Telegram delivery error to {cid}: {e}")
 
 # ==========================================
 # 3. STATE & LEDGER MANAGEMENT
@@ -96,7 +96,7 @@ def record_trade_to_ledger(trade_record):
         logger.error(f"Error saving ledger: {e}")
 
 # ==========================================
-# 4. MARKET DATA & CALCULATIONS (ZERO-DELAY NSE ENGINE)
+# 4. MARKET DATA & CALCULATIONS
 # ==========================================
 def fetch_previous_ohlc():
     try:
@@ -121,37 +121,21 @@ def calculate_levels(high, low, close):
     }
     return levels
 
-# Zero-delay live NSE data fetcher
+# Clean fast price engine
 def get_live_tick():
     try:
-        data = capital_market.market_watch_all_indices()
-        if data is not None and not data.empty:
-            row = data[data['index'] == "NIFTY 50"]
-            if not row.empty:
-                val = str(row['last'].values[0]).replace(',', '')
-                return float(val)
-    except Exception:
-        pass
-    # Yahoo Finance fallback
-    try:
-        ticker = yf.Ticker(YF_TICKERS["NIFTY 50"])
-        df = ticker.history(period="1d", interval="1m")
-        if not df.empty:
-            return float(df['Close'].iloc[-1])
+        data = yf.download(tickers=YF_TICKERS["NIFTY 50"], period="1d", interval="1m", progress=False)
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            return float(data['Close'].iloc[-1])
     except Exception as e:
         logger.error(f"Error fetching live tick: {e}")
     return None
 
 def fetch_atm_options(spot_price):
-    try:
-        chain = capital_market.live_index_option_chain("NIFTY")
-        df = pd.DataFrame(chain)
-        df['strike'] = pd.to_numeric(df['strikePrice'], errors='coerce')
-        closest_strike = df.iloc[(df['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
-        return closest_strike
-    except Exception:
-        strike = round(spot_price / 50) * 50
-        return strike
+    strike = round(spot_price / 50) * 50
+    return int(strike)
 
 # ==========================================
 # 5. CORE EXECUTION BOT
@@ -159,19 +143,19 @@ def fetch_atm_options(spot_price):
 def main():
     logger.info("Initializing SAS Level Pulse Bot...")
 
-    # --- BOT STARTUP ALERT (ADMIN ONLY) ---
+    # Startup Alert (Direct to Channel & Admin)
     startup_msg = (
         f"🚀 <b>SAS LEVEL PULSE LIVE</b>\n\n"
         f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
         f"📊 <b>Index:</b> NIFTY 50\n"
         f"🕒 <b>Time:</b> {datetime.now(IST).strftime('%I:%M:%S %p')} IST\n"
-        f"🛡️ <b>Engine Status:</b> Running & Monitoring Active (Zero-Delay NSE Feed)."
+        f"🛡️ <b>Engine Status:</b> Fast Live Scanner Active."
     )
-    send_telegram_alert(startup_msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
+    send_telegram_alert(startup_msg)
 
     high, low, close = fetch_previous_ohlc()
     if not high:
-        logger.error("Failed to obtain previous session OHLC. Retrying on next loop.")
+        logger.error("Failed to obtain previous session OHLC.")
         return
 
     levels = calculate_levels(high, low, close)
@@ -186,7 +170,7 @@ def main():
         now = datetime.now(IST)
         current_time = now.time()
 
-        # 09:05 AM - Levels Alert (ADMIN ONLY)
+        # 09:05 AM - Levels Alert
         if current_time >= dtime(9, 5) and not levels_posted:
             msg = (
                 f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
@@ -200,15 +184,20 @@ def main():
                 f"<i>Tracking live tick-by-tick momentum.</i>\n"
                 f"⚠️ <i>Strictly for educational study only. Not SEBI registered.</i>"
             )
-            send_telegram_alert(msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
+            send_telegram_alert(msg)
             levels_posted = True
 
-        # 09:15 to 15:25 - Active Scanning & Monitoring
+        # Active Scanning Window
         if dtime(9, 15) <= current_time <= dtime(15, 25):
             current_tick = get_live_tick()
-            if current_tick and prev_tick:
+            if current_tick:
+                if prev_tick is None:
+                    prev_tick = current_tick
+                    time.sleep(1)
+                    continue
+
                 # -----------------------------------------------
-                # SCENARIO A: MONITOR ACTIVE TRADE (PUBLIC + ADMIN)
+                # SCENARIO A: MONITOR ACTIVE TRADE
                 # -----------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
@@ -218,9 +207,7 @@ def main():
                     t3 = active_trade["t3"]
                     sl = active_trade["sl"]
 
-                    # LONG / CALL POSITION
                     if side == "BUY CE":
-                        # Hit Target 3 -> Full Exit
                         if current_tick >= t3:
                             msg = f"🎯 <b>TARGET 3 ACHIEVED! [BUY CE]</b>\nPrice: {current_tick:.2f}\nTrade closed in full profit."
                             send_telegram_alert(msg)
@@ -229,7 +216,6 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                        # Hit Target 2 -> Trail SL to T1
                         elif current_tick >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
@@ -237,7 +223,6 @@ def main():
                             send_telegram_alert(msg)
                             save_daily_state(active_trade)
 
-                        # Hit Target 1 -> Trail SL to Cost
                         elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
@@ -245,7 +230,6 @@ def main():
                             send_telegram_alert(msg)
                             save_daily_state(active_trade)
 
-                        # Stop Loss Hit
                         elif current_tick <= sl:
                             if active_trade.get("highest_target", 0) >= 1:
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
@@ -257,9 +241,7 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                    # SHORT / PUT POSITION
                     elif side == "BUY PE":
-                        # Hit Target 3 -> Full Exit
                         if current_tick <= t3:
                             msg = f"🎯 <b>TARGET 3 ACHIEVED! [BUY PE]</b>\nPrice: {current_tick:.2f}\nTrade closed in full profit."
                             send_telegram_alert(msg)
@@ -268,23 +250,20 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                        # Hit Target 2 -> Trail SL to T1
-                        elif current_tick >= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif current_tick <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             msg = f"🎯 <b>TARGET 2 ACHIEVED! [BUY PE]</b>\nPrice: {current_tick:.2f}\nSL trailed to Target 1 ({t1:.2f})."
                             send_telegram_alert(msg)
                             save_daily_state(active_trade)
 
-                        # Hit Target 1 -> Trail SL to Cost
-                        elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
+                        elif current_tick <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             msg = f"🎯 <b>TARGET 1 ACHIEVED! [BUY PE]</b>\nPrice: {current_tick:.2f}\nSL trailed safely to Cost ({entry:.2f}). Ready for new opportunities."
                             send_telegram_alert(msg)
                             save_daily_state(active_trade)
 
-                        # Stop Loss Hit
                         elif current_tick >= sl:
                             if active_trade.get("highest_target", 0) >= 1:
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
@@ -297,14 +276,13 @@ def main():
                             save_daily_state(None)
 
                 # -----------------------------------------------
-                # SCENARIO B: SCAN FOR NEW TRADES (PUBLIC + ADMIN)
+                # SCENARIO B: SCAN FOR NEW TRADES
                 # -----------------------------------------------
                 if active_trade is None:
                     trigger = None
                     trade_type = ""
                     risk_pts = 25.0
 
-                    # 1. Bullish Breakout (Above H4)
                     if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
                         trigger = "BUY CE"
                         trade_type = "Breakout Spike (Above R4)"
@@ -314,7 +292,6 @@ def main():
                         t2 = entry + (risk_pts * 1.889)
                         t3 = entry + (risk_pts * 2.834)
 
-                    # 2. Bullish Reversal (Bounce from S3)
                     elif prev_tick <= levels["L3"] and current_tick > levels["L3"]:
                         trigger = "BUY CE"
                         trade_type = "Support Bounce (Reversal from S3)"
@@ -324,7 +301,6 @@ def main():
                         t2 = entry + (risk_pts * 1.889)
                         t3 = entry + (risk_pts * 2.834)
 
-                    # 3. Bearish Breakdown (Below L4)
                     elif prev_tick > levels["L4"] and current_tick <= levels["L4"]:
                         trigger = "BUY PE"
                         trade_type = "Breakdown Spike (Below S4)"
@@ -334,7 +310,6 @@ def main():
                         t2 = entry - (risk_pts * 1.889)
                         t3 = entry - (risk_pts * 2.834)
 
-                    # 4. Bearish Reversal (Rejection from R3)
                     elif prev_tick >= levels["H3"] and current_tick < levels["H3"]:
                         trigger = "BUY PE"
                         trade_type = "Resistance Rejection (Reversal from R3)"
@@ -350,7 +325,7 @@ def main():
                             "index": "NIFTY 50",
                             "side": trigger,
                             "type": trade_type,
-                            "strike": f"{int(strike)} {trigger.split()[-1]}",
+                            "strike": f"{strike} {trigger.split()[-1]}",
                             "entry": entry,
                             "sl": sl,
                             "initial_sl": sl,
@@ -378,7 +353,7 @@ def main():
                         )
                         send_telegram_alert(msg)
 
-                # --- HOURLY STATUS ALERT (ADMIN ONLY) ---
+                # Hourly heartbeat alert
                 if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                     last_heartbeat_hour = now.hour
                     diff = current_tick - close
@@ -388,12 +363,11 @@ def main():
                         f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n\n"
                         f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
                     )
-                    send_telegram_alert(hb_msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
+                    send_telegram_alert(hb_msg)
 
-            if current_tick:
                 prev_tick = current_tick
 
-        # 03:25 PM - Auto-Square Off (PUBLIC + ADMIN)
+        # Auto Square Off at 03:25 PM
         if current_time >= dtime(15, 25) and active_trade is not None:
             active_trade["status"] = "EOD Auto-Exit"
             record_trade_to_ledger(active_trade)
@@ -401,12 +375,11 @@ def main():
             save_daily_state(None)
             send_telegram_alert("🔔 <b>MARKET CLOSING:</b> All open positions auto-squared off.")
 
-        # 03:40 PM - Safe Shutdown (ADMIN ONLY)
+        # Shutdown at 03:40 PM
         if current_time >= dtime(15, 40):
-            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Pulse shutting down safely.", chat_id=TELEGRAM_ADMIN_CHAT_ID)
+            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Pulse shutting down safely.")
             break
 
-        # 1-second interval fast live scanning
         time.sleep(1)
 
 if __name__ == "__main__":
