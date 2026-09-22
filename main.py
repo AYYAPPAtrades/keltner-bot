@@ -29,7 +29,7 @@ CHANNEL_CHAT_ID = "-1004416495917"
 PUBLIC_ALERT_IDS = [CHANNEL_CHAT_ID, ADMIN_CHAT_ID]
 
 tele_session = requests.Session()
-STRATEGY_DISPLAY_NAME = "CAMARILLA LEVEL TRACKER"
+STRATEGY_DISPLAY_NAME = "SAS LEVEL PULSE"
 
 # --- EMAIL CONFIGURATION ---
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -190,8 +190,8 @@ if restored_trades:
     )
 else:
     send_admin_alert(
-        f"🚀 SAS LEVEL TRACKER LIVE\n\n"
-        f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+        f"🚀 SAS LEVEL PULSE LIVE\n\n"
+        f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
         f"🕒 Time: {start_now.strftime('%I:%M:%S %p')} IST\n"
         f"🛡️ Engine Active: 09:00 AM - 03:40 PM"
     )
@@ -271,8 +271,8 @@ def get_option_recommendations(index_name, spot_price, signal_direction, spot_ri
         "seller_t3": seller_t3
     }
 
-# --- DYNAMIC CAMARILLA & VOLATILITY DYNAMICS ---
-def calculate_camarilla_pivots(index_name):
+# --- DYNAMIC LEVEL CALCULATION ---
+def calculate_levels(index_name):
     try:
         ticker = YF_TICKERS.get(index_name)
         df_daily = yf.download(ticker, period="5d", interval="1d", progress=False)
@@ -301,11 +301,11 @@ def calculate_camarilla_pivots(index_name):
                 "Dynamic_Risk": dynamic_sl_risk
             }
     except Exception as e:
-        print(f"Camarilla calculation error ({index_name}): {e}")
+        print(f"Level calculation error ({index_name}): {e}")
     return None
 
 for idx in INDEX_WATCHLIST:
-    camarilla_levels[idx] = calculate_camarilla_pivots(idx)
+    camarilla_levels[idx] = calculate_levels(idx)
 
 # --- PDF REPORT GENERATOR ---
 def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
@@ -314,12 +314,12 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     elements = []
 
     title_style = ParagraphStyle('RepTitle', parent=styles['Heading1'], fontSize=14, leading=17, textColor=colors.HexColor("#1A365D"), alignment=1)
-    elements.append(Paragraph(f"SAS LEVEL TRACKER - {title_text}", title_style))
+    elements.append(Paragraph(f"SAS LEVEL PULSE - {title_text}", title_style))
     pnl_status_text = f"NET POINTS: +{total_pnl:.2f} Pts" if total_pnl >= 0 else f"NET POINTS: {total_pnl:.2f} Pts"
-    elements.append(Paragraph(f"Model: {STRATEGY_DISPLAY_NAME} | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
+    elements.append(Paragraph(f"Strategy: {STRATEGY_DISPLAY_NAME} | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
     elements.append(Spacer(1, 10))
 
-    headers = ["SL", "Date", "Index & Type", "Entry & Time", "Level 1", "Level 2", "Level 3", "Threshold", "Points", "Status"]
+    headers = ["SL", "Date", "Index & Type", "Entry & Time", "Target 1", "Target 2", "Target 3", "Threshold", "Points", "Status"]
     table_rows = [headers]
 
     for i, l in enumerate(logs, 1):
@@ -379,15 +379,15 @@ while True:
             open_alert_sent = True
             send_telegram_alert(
                 f"🔔 PRE-MARKET TRACKER ONLINE (09:00 AM)\n\n"
-                f"📍 Channel: SAS LEVEL TRACKER\n"
-                f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                f"📍 Channel: SAS LEVEL PULSE\n"
+                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                 f"📅 Date: {today_date_str}\n"
-                f"🛡️ Algorithmic calculation levels stream commences at 09:15 AM IST."
+                f"🛡️ Dynamic calculation levels stream commences at 09:15 AM IST."
             )
 
         if not pivots_alert_sent and (pivot_alert_time <= current_time < start_trade_time):
             pivots_alert_sent = True
-            p_msg = f"📐 DAILY MATHEMATICAL LEVELS (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Model: {STRATEGY_DISPLAY_NAME}\n\n"
+            p_msg = f"📐 DAILY SAS LEVEL PULSE LEVELS (09:05 AM)\n📅 Date: {today_date_str}\n⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n\n"
             for idx in INDEX_WATCHLIST:
                 lvl = camarilla_levels.get(idx)
                 if lvl:
@@ -420,7 +420,7 @@ while True:
             daily_summary = (
                 f"📊 DAILY PERFORMANCE SUMMARY (03:40 PM)\n\n"
                 f"📅 Date: {today_date_str}\n"
-                f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                 f"• Today Level Triggers: {len(daily_completed_trades)}\n"
                 f"• Level 1 Hits: {trade_stats['target_hits']}\n"
                 f"• Threshold Touch: {trade_stats['sl_hits']}\n\n"
@@ -440,7 +440,7 @@ while True:
                 monthly_summary = (
                     f"🏆 MONTHLY EXPIRY CYCLE REPORT (03:40 PM)\n\n"
                     f"📅 Expiry Date: {today_date_str}\n"
-                    f"⚡ Model: {STRATEGY_DISPLAY_NAME}\n"
+                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
                     f"• Month Cycle Total Crossovers: {len(records)}\n\n"
                     f"📈 Net Cycle Points: {total_pnl:+.2f} Pts\n\n"
                     f"Dispatching Complete Expiry Ledger PDF..."
