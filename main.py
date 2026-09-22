@@ -96,7 +96,7 @@ def record_trade_to_ledger(trade_record):
         logger.error(f"Error saving ledger: {e}")
 
 # ==========================================
-# 4. MARKET DATA & CALCULATIONS
+# 4. MARKET DATA & CALCULATIONS (ZERO-DELAY NSE ENGINE)
 # ==========================================
 def fetch_previous_ohlc():
     try:
@@ -121,7 +121,18 @@ def calculate_levels(high, low, close):
     }
     return levels
 
+# Zero-delay live NSE data fetcher
 def get_live_tick():
+    try:
+        data = capital_market.market_watch_all_indices()
+        if data is not None and not data.empty:
+            row = data[data['index'] == "NIFTY 50"]
+            if not row.empty:
+                val = str(row['last'].values[0]).replace(',', '')
+                return float(val)
+    except Exception:
+        pass
+    # Yahoo Finance fallback
     try:
         ticker = yf.Ticker(YF_TICKERS["NIFTY 50"])
         df = ticker.history(period="1d", interval="1m")
@@ -135,7 +146,6 @@ def fetch_atm_options(spot_price):
     try:
         chain = capital_market.live_index_option_chain("NIFTY")
         df = pd.DataFrame(chain)
-        # Filter near strike
         df['strike'] = pd.to_numeric(df['strikePrice'], errors='coerce')
         closest_strike = df.iloc[(df['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
         return closest_strike
@@ -155,7 +165,7 @@ def main():
         f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
         f"📊 <b>Index:</b> NIFTY 50\n"
         f"🕒 <b>Time:</b> {datetime.now(IST).strftime('%I:%M:%S %p')} IST\n"
-        f"🛡️ <b>Engine Status:</b> Running & Monitoring Active."
+        f"🛡️ <b>Engine Status:</b> Running & Monitoring Active (Zero-Delay NSE Feed)."
     )
     send_telegram_alert(startup_msg, chat_id=TELEGRAM_ADMIN_CHAT_ID)
 
@@ -207,7 +217,6 @@ def main():
                     t2 = active_trade["t2"]
                     t3 = active_trade["t3"]
                     sl = active_trade["sl"]
-                    initial_sl = active_trade["initial_sl"]
 
                     # LONG / CALL POSITION
                     if side == "BUY CE":
@@ -239,7 +248,6 @@ def main():
                         # Stop Loss Hit
                         elif current_tick <= sl:
                             if active_trade.get("highest_target", 0) >= 1:
-                                # Cost / Profit Trailing Exit (Silent Exit)
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
                             else:
                                 msg = f"🛑 <b>STOP LOSS HIT [BUY CE]</b>\nPrice: {current_tick:.2f}\nExited position."
@@ -261,7 +269,7 @@ def main():
                             save_daily_state(None)
 
                         # Hit Target 2 -> Trail SL to T1
-                        elif current_tick <= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif current_tick >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             msg = f"🎯 <b>TARGET 2 ACHIEVED! [BUY PE]</b>\nPrice: {current_tick:.2f}\nSL trailed to Target 1 ({t1:.2f})."
@@ -269,7 +277,7 @@ def main():
                             save_daily_state(active_trade)
 
                         # Hit Target 1 -> Trail SL to Cost
-                        elif current_tick <= t1 and active_trade.get("highest_target", 0) < 1:
+                        elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             msg = f"🎯 <b>TARGET 1 ACHIEVED! [BUY PE]</b>\nPrice: {current_tick:.2f}\nSL trailed safely to Cost ({entry:.2f}). Ready for new opportunities."
@@ -279,7 +287,6 @@ def main():
                         # Stop Loss Hit
                         elif current_tick >= sl:
                             if active_trade.get("highest_target", 0) >= 1:
-                                # Cost / Profit Trailing Exit (Silent Exit)
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
                             else:
                                 msg = f"🛑 <b>STOP LOSS HIT [BUY PE]</b>\nPrice: {current_tick:.2f}\nExited position."
@@ -295,7 +302,7 @@ def main():
                 if active_trade is None:
                     trigger = None
                     trade_type = ""
-                    risk_pts = 25.0  # Dynamic risk baseline
+                    risk_pts = 25.0
 
                     # 1. Bullish Breakout (Above H4)
                     if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
@@ -394,7 +401,12 @@ def main():
             save_daily_state(None)
             send_telegram_alert("🔔 <b>MARKET CLOSING:</b> All open positions auto-squared off.")
 
-        # 1-second interval live scanning
+        # 03:40 PM - Safe Shutdown (ADMIN ONLY)
+        if current_time >= dtime(15, 40):
+            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Pulse shutting down safely.", chat_id=TELEGRAM_ADMIN_CHAT_ID)
+            break
+
+        # 1-second interval fast live scanning
         time.sleep(1)
 
 if __name__ == "__main__":
