@@ -224,11 +224,15 @@ def main():
     last_heartbeat_hour = -1
     today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
 
+    # SL അടിച്ചാൽ ഉടൻ വീണ്ടും അതേ ലെവലിൽ തെറ്റായ സിഗ്നൽ വരാതിരിക്കാനുള്ള കൂൾഡൗൺ
+    sl_cooldown_until = None
+    last_sl_side = None
+
     while True:
         now = datetime.now(IST)
         current_time = now.time()
 
-        # 09:05 AM - Levels Alert (Channel & Telegram Joiners)
+        # 09:05 AM - Levels Alert
         if current_time >= dtime(9, 5) and not levels_posted:
             msg = (
                 f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
@@ -299,7 +303,6 @@ def main():
 
                         # SL / Trailing Hit
                         elif current_tick <= sl:
-                            # T1 അടിച്ച ശേഷം SL പോയാൽ നഷ്ടം കണക്കാക്കില്ല; അച്ചീവ് ചെയ്ത ടാർഗെറ്റിന്റെ P&L എടുക്കും
                             if active_trade.get("highest_target", 0) >= 1:
                                 target_num = active_trade["highest_target"]
                                 booked_pnl = active_trade.get("locked_pnl", 0.0)
@@ -313,6 +316,8 @@ def main():
                                 active_trade["pnl"] = pnl
                                 active_trade["status"] = "Stop Loss Hit"
                                 send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                                sl_cooldown_until = now + timedelta(minutes=3)
+                                last_sl_side = "BUY"
 
                             record_trade_to_ledger(active_trade)
                             active_trade = None
@@ -351,7 +356,6 @@ def main():
 
                         # SL / Trailing Hit
                         elif current_tick >= sl:
-                            # T1 അടിച്ച ശേഷം SL പോയാൽ നഷ്ടം കണക്കാക്കില്ല; അച്ചീവ് ചെയ്ത ടാർഗെറ്റിന്റെ P&L എടുക്കും
                             if active_trade.get("highest_target", 0) >= 1:
                                 target_num = active_trade["highest_target"]
                                 booked_pnl = active_trade.get("locked_pnl", 0.0)
@@ -365,87 +369,100 @@ def main():
                                 active_trade["pnl"] = pnl
                                 active_trade["status"] = "Stop Loss Hit"
                                 send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                                sl_cooldown_until = now + timedelta(minutes=3)
+                                last_sl_side = "SELL"
 
                             record_trade_to_ledger(active_trade)
                             active_trade = None
                             save_daily_state(None)
 
                 # -----------------------------------------------
-                # SCENARIO B: SCAN FOR NEW TRADES
+                # SCENARIO B: SCAN FOR NEW TRADES & AUTO-SWITCH AFTER T1
                 # -----------------------------------------------
-                if active_trade is None:
+                trigger = None
+                trade_type = ""
+                risk_pts = dynamic_risk
+
+                if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
+                    trigger = "BUY"
+                    trade_type = "Breakout Spike (Above R4)"
+                elif prev_tick <= levels["L3"] and current_tick > levels["L3"]:
+                    trigger = "BUY"
+                    trade_type = "Support Bounce (Reversal from S3)"
+                elif prev_tick > levels["L4"] and current_tick <= levels["L4"]:
+                    trigger = "SELL"
+                    trade_type = "Breakdown Spike (Below S4)"
+                elif prev_tick >= levels["H3"] and current_tick < levels["H3"]:
+                    trigger = "SELL"
+                    trade_type = "Resistance Rejection (Reversal from R3)"
+
+                # SL അടിച്ചതിന് ശേഷമുള്ള തെറ്റായ തുടർ സിഗ്നലുകൾ തടയൽ
+                if trigger and sl_cooldown_until and now < sl_cooldown_until and trigger == last_sl_side:
                     trigger = None
-                    trade_type = ""
-                    risk_pts = dynamic_risk
 
-                    if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
-                        trigger = "BUY"
-                        trade_type = "Breakout Spike (Above R4)"
-                        entry = current_tick
-                        sl = entry - risk_pts
-                        t1 = entry + (risk_pts * 1.417)
-                        t2 = entry + (risk_pts * 1.889)
-                        t3 = entry + (risk_pts * 2.834)
-
-                    elif prev_tick <= levels["L3"] and current_tick > levels["L3"]:
-                        trigger = "BUY"
-                        trade_type = "Support Bounce (Reversal from S3)"
-                        entry = current_tick
-                        sl = entry - risk_pts
-                        t1 = entry + (risk_pts * 1.417)
-                        t2 = entry + (risk_pts * 1.889)
-                        t3 = entry + (risk_pts * 2.834)
-
-                    elif prev_tick > levels["L4"] and current_tick <= levels["L4"]:
-                        trigger = "SELL"
-                        trade_type = "Breakdown Spike (Below S4)"
-                        entry = current_tick
-                        sl = entry + risk_pts
-                        t1 = entry - (risk_pts * 1.417)
-                        t2 = entry - (risk_pts * 1.889)
-                        t3 = entry - (risk_pts * 2.834)
-
-                    elif prev_tick >= levels["H3"] and current_tick < levels["H3"]:
-                        trigger = "SELL"
-                        trade_type = "Resistance Rejection (Reversal from R3)"
-                        entry = current_tick
-                        sl = entry + risk_pts
-                        t1 = entry - (risk_pts * 1.417)
-                        t2 = entry - (risk_pts * 1.889)
-                        t3 = entry - (risk_pts * 2.834)
-
-                    if trigger:
-                        active_trade = {
-                            "date": today_date_str,
-                            "index": "NIFTY 50",
-                            "side": trigger,
-                            "type": trade_type,
-                            "entry": entry,
-                            "sl": sl,
-                            "initial_sl": sl,
-                            "t1": t1,
-                            "t2": t2,
-                            "t3": t3,
-                            "highest_target": 0,
-                            "locked_pnl": 0.0,
-                            "time": now.strftime("%H:%M:%S")
-                        }
-                        save_daily_state(active_trade)
-
-                        msg = (
-                            f"⚡ <b>SAS LEVEL PULSE SIGNAL</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━━━\n"
-                            f"📊 <b>Index:</b> NIFTY 50\n"
-                            f"🎯 <b>Action:</b> {trigger}\n"
-                            f"💡 <b>Pattern:</b> {trade_type}\n"
-                            f"🔹 <b>Entry:</b> {entry:.2f}\n"
-                            f"🛑 <b>Stop Loss:</b> {sl:.2f} ({risk_pts:.1f} Pts)\n"
-                            f"🎯 <b>Target 1:</b> {t1:.2f}\n"
-                            f"🎯 <b>Target 2:</b> {t2:.2f}\n"
-                            f"🎯 <b>Target 3:</b> {t3:.2f}\n"
-                            f"━━━━━━━━━━━━━━━━━━━━"
+                # TARGET 1 അടിച്ചതിന് ശേഷം പുതിയ എതിർ സിഗ്നൽ വന്നാൽ പഴയത് ക്ലോസ് ചെയ്ത് പുതിയതിലേക്ക് മാറൽ
+                if trigger and active_trade is not None:
+                    if active_trade.get("highest_target", 0) >= 1 and active_trade["side"] != trigger:
+                        target_num = active_trade["highest_target"]
+                        booked_pnl = active_trade.get("locked_pnl", 0.0)
+                        active_trade["status"] = f"Target {target_num} Achieved (Switched)"
+                        active_trade["exit_price"] = active_trade[f"t{target_num}"]
+                        active_trade["pnl"] = booked_pnl
+                        record_trade_to_ledger(active_trade)
+                        send_telegram_alert(
+                            f"🔄 <b>POSITION SWITCHED TO {trigger}!</b>\n"
+                            f"Old {active_trade['side']} position safely closed with Target {target_num} profit (+{booked_pnl:.2f} Pts)."
                         )
-                        send_telegram_alert(msg)
+                        active_trade = None
+                        save_daily_state(None)
+                    else:
+                        trigger = None
+
+                # പുതിയ ട്രേഡ് ആരംഭിക്കൽ
+                if trigger and active_trade is None:
+                    entry = current_tick
+                    if trigger == "BUY":
+                        sl = entry - risk_pts
+                        t1 = entry + (risk_pts * 1.417)
+                        t2 = entry + (risk_pts * 1.889)
+                        t3 = entry + (risk_pts * 2.834)
+                    else:
+                        sl = entry + risk_pts
+                        t1 = entry - (risk_pts * 1.417)
+                        t2 = entry - (risk_pts * 1.889)
+                        t3 = entry - (risk_pts * 2.834)
+
+                    active_trade = {
+                        "date": today_date_str,
+                        "index": "NIFTY 50",
+                        "side": trigger,
+                        "type": trade_type,
+                        "entry": entry,
+                        "sl": sl,
+                        "initial_sl": sl,
+                        "t1": t1,
+                        "t2": t2,
+                        "t3": t3,
+                        "highest_target": 0,
+                        "locked_pnl": 0.0,
+                        "time": now.strftime("%H:%M:%S")
+                    }
+                    save_daily_state(active_trade)
+
+                    msg = (
+                        f"⚡ <b>SAS LEVEL PULSE SIGNAL</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 <b>Index:</b> NIFTY 50\n"
+                        f"🎯 <b>Action:</b> {trigger}\n"
+                        f"💡 <b>Pattern:</b> {trade_type}\n"
+                        f"🔹 <b>Entry:</b> {entry:.2f}\n"
+                        f"🛑 <b>Stop Loss:</b> {sl:.2f} ({risk_pts:.1f} Pts)\n"
+                        f"🎯 <b>Target 1:</b> {t1:.2f}\n"
+                        f"🎯 <b>Target 2:</b> {t2:.2f}\n"
+                        f"🎯 <b>Target 3:</b> {t3:.2f}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━"
+                    )
+                    send_telegram_alert(msg)
 
                 # Hourly heartbeat alert
                 if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
