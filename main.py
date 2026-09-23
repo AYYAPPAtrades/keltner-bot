@@ -26,7 +26,8 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # Credentials & Bot Tokens
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftyfivtybanknifty")
+# SAS LEVEL TRACKER CHANNEL ID
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004416495917")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
 
 # Watchlist & Tickers (NIFTY 50 Only)
@@ -47,7 +48,7 @@ def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
     try:
-        telegram_session.post(url, json=payload, timeout=3)
+        telegram_session.post(url, json=payload, timeout=10)
     except Exception as e:
         logger.error(f"[TELEGRAM ERROR] {cid}: {e}")
 
@@ -168,9 +169,6 @@ def fetch_previous_ohlc():
 
 def calculate_levels(high, low, close):
     diff = high - low
-    base_risk = round(diff * 0.125, 2)
-    dynamic_risk = max(15.0, min(base_risk, 30.0))
-    
     levels = {
         "H5": close + (1.1 * diff),
         "H4": close + (diff * 1.1 / 2.0),
@@ -178,7 +176,7 @@ def calculate_levels(high, low, close):
         "L3": close - (diff * 1.1 / 4.0),
         "L4": close - (diff * 1.1 / 2.0),
         "L5": close - (1.1 * diff),
-        "Dynamic_Risk": dynamic_risk
+        "Dynamic_Risk": 30.0  # 30 Points Fixed Risk (50/50)
     }
     return levels
 
@@ -199,16 +197,6 @@ def get_live_tick():
 def main():
     logger.info("Initializing SAS Level Pulse Bot...")
 
-    # 09:00 AM Engine Alert
-    startup_msg = (
-        f"🚀 <b>SAS LEVEL PULSE LIVE (09:00 AM)</b>\n\n"
-        f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
-        f"📊 <b>Index:</b> NIFTY 50\n"
-        f"🕒 <b>Time:</b> {datetime.now(IST).strftime('%I:%M:%S %p')} IST\n"
-        f"🛡️ <b>Engine Status:</b> Fast Real-Time Scanner Active."
-    )
-    send_telegram_alert(startup_msg)
-
     high, low, close = fetch_previous_ohlc()
     if not high:
         logger.error("Failed to obtain previous session OHLC.")
@@ -216,21 +204,33 @@ def main():
 
     levels = calculate_levels(high, low, close)
     dynamic_risk = levels["Dynamic_Risk"]
-    logger.info(f"NIFTY Levels Loaded: R4={levels['H4']:.2f}, R3={levels['H3']:.2f}, S3={levels['L3']:.2f}, S4={levels['L4']:.2f}, Dynamic Risk={dynamic_risk} Pts")
+    logger.info(f"NIFTY Levels Loaded: R4={levels['H4']:.2f}, R3={levels['H3']:.2f}, S3={levels['L3']:.2f}, S4={levels['L4']:.2f}, Risk={dynamic_risk} Pts")
 
+    startup_alert_sent = False
     levels_posted = False
     active_trade = load_backup_state()
     prev_tick = None
     last_heartbeat_hour = -1
     today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
 
-    # SL അടിച്ചാൽ ഉടൻ വീണ്ടും അതേ ലെവലിൽ തെറ്റായ സിഗ്നൽ വരാതിരിക്കാനുള്ള കൂൾഡൗൺ
     sl_cooldown_until = None
     last_sl_side = None
 
     while True:
         now = datetime.now(IST)
         current_time = now.time()
+
+        # 09:00 AM Engine Alert (SAS LEVEL TRACKER)
+        if current_time >= dtime(9, 0) and not startup_alert_sent:
+            startup_msg = (
+                f"🚀 <b>SAS LEVEL TRACKER LIVE (09:00 AM)</b>\n\n"
+                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
+                f"📊 <b>Index:</b> NIFTY 50\n"
+                f"🕒 <b>Time:</b> {now.strftime('%I:%M:%S %p')} IST\n"
+                f"🛡️ <b>Engine Status:</b> Fast Real-Time Scanner Active."
+            )
+            send_telegram_alert(startup_msg)
+            startup_alert_sent = True
 
         # 09:05 AM - Levels Alert
         if current_time >= dtime(9, 5) and not levels_posted:
@@ -381,7 +381,7 @@ def main():
                 # -----------------------------------------------
                 trigger = None
                 trade_type = ""
-                risk_pts = dynamic_risk
+                risk_pts = dynamic_risk  # 30 Pts
 
                 if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
                     trigger = "BUY"
@@ -396,11 +396,9 @@ def main():
                     trigger = "SELL"
                     trade_type = "Resistance Rejection (Reversal from R3)"
 
-                # SL അടിച്ചതിന് ശേഷമുള്ള തെറ്റായ തുടർ സിഗ്നലുകൾ തടയൽ
                 if trigger and sl_cooldown_until and now < sl_cooldown_until and trigger == last_sl_side:
                     trigger = None
 
-                # TARGET 1 അടിച്ചതിന് ശേഷം പുതിയ എതിർ സിഗ്നൽ വന്നാൽ പഴയത് ക്ലോസ് ചെയ്ത് പുതിയതിലേക്ക് മാറൽ
                 if trigger and active_trade is not None:
                     if active_trade.get("highest_target", 0) >= 1 and active_trade["side"] != trigger:
                         target_num = active_trade["highest_target"]
@@ -418,19 +416,19 @@ def main():
                     else:
                         trigger = None
 
-                # പുതിയ ട്രേഡ് ആരംഭിക്കൽ
+                # NEW TRADE ENTRY (30 Pts SL & 30 Pts Target 1)
                 if trigger and active_trade is None:
                     entry = current_tick
                     if trigger == "BUY":
-                        sl = entry - risk_pts
-                        t1 = entry + (risk_pts * 1.417)
-                        t2 = entry + (risk_pts * 1.889)
-                        t3 = entry + (risk_pts * 2.834)
+                        sl = round(entry - risk_pts, 2)
+                        t1 = round(entry + risk_pts, 2)
+                        t2 = round(entry + (risk_pts * 2.0), 2)
+                        t3 = round(entry + (risk_pts * 3.0), 2)
                     else:
-                        sl = entry + risk_pts
-                        t1 = entry - (risk_pts * 1.417)
-                        t2 = entry - (risk_pts * 1.889)
-                        t3 = entry - (risk_pts * 2.834)
+                        sl = round(entry + risk_pts, 2)
+                        t1 = round(entry - risk_pts, 2)
+                        t2 = round(entry - (risk_pts * 2.0), 2)
+                        t3 = round(entry - (risk_pts * 3.0), 2)
 
                     active_trade = {
                         "date": today_date_str,
@@ -450,16 +448,16 @@ def main():
                     save_daily_state(active_trade)
 
                     msg = (
-                        f"⚡ <b>SAS LEVEL PULSE SIGNAL</b>\n"
+                        f"⚡ <b>SAS LEVEL TRACKER SIGNAL</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📊 <b>Index:</b> NIFTY 50\n"
                         f"🎯 <b>Action:</b> {trigger}\n"
                         f"💡 <b>Pattern:</b> {trade_type}\n"
                         f"🔹 <b>Entry:</b> {entry:.2f}\n"
                         f"🛑 <b>Stop Loss:</b> {sl:.2f} ({risk_pts:.1f} Pts)\n"
-                        f"🎯 <b>Target 1:</b> {t1:.2f}\n"
-                        f"🎯 <b>Target 2:</b> {t2:.2f}\n"
-                        f"🎯 <b>Target 3:</b> {t3:.2f}\n"
+                        f"🎯 <b>Target 1:</b> {t1:.2f} (30.0 Pts)\n"
+                        f"🎯 <b>Target 2:</b> {t2:.2f} (60.0 Pts)\n"
+                        f"🎯 <b>Target 3:</b> {t3:.2f} (90.0 Pts)\n"
                         f"━━━━━━━━━━━━━━━━━━━━"
                     )
                     send_telegram_alert(msg)
@@ -502,7 +500,7 @@ def main():
                 f"📊 <b>DAILY PERFORMANCE SUMMARY (03:40 PM)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"📅 <b>Date:</b> {today_str_display}\n"
-                f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
+                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
                 f"• Today Trades: {len(today_trades)}\n"
                 f"📈 <b>Day Net Points:</b> {today_pnl:+.2f} Pts\n"
                 f"━━━━━━━━━━━━━━━━━━━━"
@@ -516,7 +514,7 @@ def main():
                     f"🏆 <b>MONTHLY EXPIRY CYCLE REPORT (03:40 PM)</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📅 <b>Expiry Date:</b> {today_str_display}\n"
-                    f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
+                    f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
                     f"• Total Month Crossovers: {len(ledger)}\n"
                     f"📈 <b>Net Cycle Points:</b> {total_cycle_pnl:+.2f} Pts\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -525,7 +523,7 @@ def main():
                 send_telegram_alert(monthly_summary)
                 clear_expiry_ledger()
 
-            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Pulse shutting down safely.")
+            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Tracker shutting down safely.")
             break
 
         time.sleep(1)
