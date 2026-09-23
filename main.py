@@ -14,7 +14,6 @@ from datetime import datetime, timedelta, time as dtime
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import yfinance as yf
-from nselib import capital_market
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -112,11 +111,22 @@ def send_email_with_pdf(file_path, subject, body):
 # ==========================================
 def get_nse_holidays():
     try:
-        holidays_df = capital_market.holiday_trading()
-        if holidays_df is not None and not holidays_df.empty and 'tradingDate' in holidays_df.columns:
-            return [datetime.strptime(d, '%d-%b-%Y').date() for d in holidays_df['tradingDate'].values]
-    except Exception as e:
-        logger.error(f"Error fetching NSE holidays: {e}")
+        url = "https://www.nseindia.com/api/holiday-master?type=trading"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*"
+        }
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            holidays = []
+            for item in data.get("CBM", []):
+                d_str = item.get("tradingDate")
+                if d_str:
+                    holidays.append(datetime.strptime(d_str, "%d-%b-%Y").date())
+            return holidays
+    except Exception:
+        pass
     return []
 
 holiday_dates = get_nse_holidays()
@@ -528,7 +538,6 @@ def main():
                     }
                     save_daily_state(active_trade)
 
-                    # Points text removed from SL & Targets
                     msg = (
                         f"⚡ <b>SAS LEVEL TRACKER SIGNAL</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
