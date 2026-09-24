@@ -34,7 +34,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004416495917")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
 
-# Public alerts for joiners (BUY, SELL, TARGETS, SL, REPORTS)
 PUBLIC_ALERT_IDS = [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
 
 SENDER_EMAIL = "shinos99@gmail.com"
@@ -43,13 +42,14 @@ RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
 STRATEGY_DISPLAY_NAME = "SAS LEVEL PULSE"
 DAILY_STATE_FILE = "daily_active_trades.json"
+WEEKLY_LEDGER_FILE = "weekly_trades_ledger.json"
 EXPIRY_LEDGER_FILE = "expiry_trades_ledger.json"
 
 telegram_session = requests.Session()
 executor = ThreadPoolExecutor(max_workers=4)
 
 # ==========================================
-# 2. ULTRA-FAST NSE LIVE SESSION
+# 2. ULTRA-FAST NSE LIVE FEED
 # ==========================================
 class FastNSELive:
     def __init__(self):
@@ -89,7 +89,7 @@ class FastNSELive:
 nse_live = FastNSELive()
 
 # ==========================================
-# 3. DISPATCH & TELEGRAM SYNC FUNCTIONS
+# 3. TELEGRAM & EMAIL DISPATCH
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -144,6 +144,9 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         logger.error(f"Email Dispatch Warning: {e}")
 
+# ==========================================
+# 4. STRICT TELEGRAM STATE RESTORATION
+# ==========================================
 def sync_active_trade_from_telegram():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         return None
@@ -160,7 +163,7 @@ def sync_active_trade_from_telegram():
                     continue
                 text = msg["text"]
 
-                if "TARGET 1 HIT" in text or "STOP LOSS HIT" in text or "TRAILING STOP" in text or "MARKET CLOSING" in text or "EXIT PREVIOUS POSITION" in text:
+                if any(x in text for x in ["TARGET 1 HIT", "STOP LOSS HIT", "TRAILING STOP", "MARKET CLOSING", "EXIT PREVIOUS POSITION"]):
                     has_closed = True
                     break
 
@@ -198,19 +201,40 @@ def sync_active_trade_from_telegram():
     return None
 
 # ==========================================
-# 4. HOLIDAYS & EXPIRY DETECTION
+# 5. HOLIDAY & TUESDAY EXPIRY ENGINE
 # ==========================================
+NSE_HOLIDAYS_2026 = [
+    "2026-01-26", "2026-03-03", "2026-03-26", "2026-04-02", "2026-04-14",
+    "2026-05-01", "2026-05-28", "2026-06-26", "2026-08-15", "2026-10-02",
+    "2026-10-20", "2026-11-09", "2026-11-24", "2026-12-25"
+]
+
+def is_trading_holiday(dt):
+    return dt.weekday() in [5, 6] or dt.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026
+
+def get_actual_expiry_day(target_date):
+    curr = target_date
+    while is_trading_holiday(curr):
+        curr -= timedelta(days=1)
+    return curr
+
+def is_today_weekly_expiry():
+    today = datetime.now(IST).date()
+    days_until_tuesday = (1 - today.weekday()) % 7
+    target_tuesday = today + timedelta(days=days_until_tuesday)
+    return today == get_actual_expiry_day(target_tuesday)
+
 def is_today_monthly_expiry():
     today = datetime.now(IST).date()
     next_month = today.replace(day=28) + timedelta(days=4)
     last_day_of_month = next_month - timedelta(days=next_month.day)
-    target_day = last_day_of_month
-    while target_day.weekday() != 1:
-        target_day -= timedelta(days=1)
-    return today == target_day
+    target_tuesday = last_day_of_month
+    while target_tuesday.weekday() != 1:
+        target_tuesday -= timedelta(days=1)
+    return today == get_actual_expiry_day(target_tuesday)
 
 # ==========================================
-# 5. STATE & LEDGER BACKUP
+# 6. STATE & MULTI-CYCLE LEDGER MANAGEMENT
 # ==========================================
 def load_backup_state():
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
@@ -232,33 +256,43 @@ def save_daily_state(active_trade):
     except Exception:
         pass
 
-def load_expiry_ledger():
-    if os.path.exists(EXPIRY_LEDGER_FILE):
+def append_to_file(filepath, record):
+    ledger = []
+    if os.path.exists(filepath):
         try:
-            with open(EXPIRY_LEDGER_FILE, "r") as f:
+            with open(filepath, "r") as f:
+                ledger = json.load(f)
+        except Exception:
+            ledger = []
+    ledger.append(record)
+    try:
+        with open(filepath, "w") as f:
+            json.dump(ledger, f, indent=4)
+    except Exception:
+        pass
+
+def record_trade_to_ledger(trade_record):
+    append_to_file(WEEKLY_LEDGER_FILE, trade_record)
+    append_to_file(EXPIRY_LEDGER_FILE, trade_record)
+
+def load_ledger(filepath):
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
                 return json.load(f)
         except Exception:
             return []
     return []
 
-def record_trade_to_ledger(trade_record):
-    ledger = load_expiry_ledger()
-    ledger.append(trade_record)
+def clear_ledger(filepath):
     try:
-        with open(EXPIRY_LEDGER_FILE, "w") as f:
-            json.dump(ledger, f, indent=4)
-    except Exception:
-        pass
-
-def clear_expiry_ledger():
-    try:
-        if os.path.exists(EXPIRY_LEDGER_FILE):
-            os.remove(EXPIRY_LEDGER_FILE)
+        if os.path.exists(filepath):
+            os.remove(filepath)
     except Exception:
         pass
 
 # ==========================================
-# 6. PDF REPORT GENERATION
+# 7. PDF REPORT GENERATOR
 # ==========================================
 def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
@@ -307,7 +341,7 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc.build(elements)
 
 # ==========================================
-# 7. MAIN ENGINE (STRICT POSITION LOCK & AUTO-REVERSAL)
+# 8. CORE ENGINE (30-PT TARGET/SL & STRICT LOCK)
 # ==========================================
 def main():
     logger.info("Starting SAS Level Pulse Engine...")
@@ -320,7 +354,8 @@ def main():
         send_admin_alert(
             f"♻️ <b>BOT RESTARTED (STATE RESTORED)</b>\n"
             f"• Position: {active_trade['side']} @ {active_trade['entry']:.2f}\n"
-            f"• Stop Loss: {active_trade['sl']:.2f} | T1: {active_trade['t1']:.2f}"
+            f"• Stop Loss: {active_trade['sl']:.2f} | T1: {active_trade['t1']:.2f}\n"
+            f"• Status: Strict Lock Active. No duplicate signals."
         )
     else:
         send_admin_alert(
@@ -342,14 +377,14 @@ def main():
             current_price = nse_live.get_nifty_price()
 
             if current_price:
-                # Reference Channel Evaluation
+                # Reference Channel Evaluation (Dynamic Momentum Detection)
                 if ref_high is None or (time.time() - last_eval_time > 60):
                     ref_high = current_price + 3.0
                     ref_low = current_price - 3.0
                     last_eval_time = time.time()
 
                 # ----------------------------------------------------
-                # SCENARIO A: ACTIVE TRADE MONITORING & REVERSAL CHECK
+                # SCENARIO A: ACTIVE TRADE MONITORING & AUTO-REVERSAL
                 # ----------------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
@@ -359,7 +394,7 @@ def main():
                     t3 = active_trade["t3"]
                     sl = active_trade["sl"]
 
-                    # 1. Check Reverse Momentum Trigger
+                    # 1. Reverse Momentum Trigger Check
                     reversal_direction = None
                     if side == "BUY" and current_price < ref_low:
                         reversal_direction = "SELL"
@@ -367,7 +402,7 @@ def main():
                         reversal_direction = "BUY"
 
                     if reversal_direction:
-                        # Step 1: Exit Previous Position Immediately
+                        # Step 1: Exit Previous Position
                         pnl = (current_price - entry) if side == "BUY" else (entry - current_price)
                         active_trade["status"] = f"Reversal Exit ({reversal_direction} Spike)"
                         active_trade["exit_price"] = current_price
@@ -383,20 +418,20 @@ def main():
                         send_telegram_alert(exit_msg)
                         time.sleep(1)
 
-                        # Step 2: Trigger New Reversal Signal
+                        # Step 2: Trigger New Reversal Signal with 30-Pt SL & Target
                         entry_time_display = now.strftime('%I:%M:%S %p')
-                        risk_pts = 30.0
+                        fixed_risk = 30.0
 
                         if reversal_direction == "BUY":
-                            new_sl = round(current_price - risk_pts, 2)
-                            new_t1 = round(current_price + risk_pts, 2)
-                            new_t2 = round(current_price + (risk_pts * 2.0), 2)
-                            new_t3 = round(current_price + (risk_pts * 3.0), 2)
+                            new_sl = round(current_price - fixed_risk, 2)
+                            new_t1 = round(current_price + fixed_risk, 2)
+                            new_t2 = round(current_price + (fixed_risk * 2.0), 2)
+                            new_t3 = round(current_price + (fixed_risk * 3.0), 2)
                         else:
-                            new_sl = round(current_price + risk_pts, 2)
-                            new_t1 = round(current_price - risk_pts, 2)
-                            new_t2 = round(current_price - (risk_pts * 2.0), 2)
-                            new_t3 = round(current_price - (risk_pts * 3.0), 2)
+                            new_sl = round(current_price + fixed_risk, 2)
+                            new_t1 = round(current_price - fixed_risk, 2)
+                            new_t2 = round(current_price - (fixed_risk * 2.0), 2)
+                            new_t3 = round(current_price - (fixed_risk * 3.0), 2)
 
                         active_trade = {
                             "date": today_date_str,
@@ -428,9 +463,8 @@ def main():
                         last_eval_time = time.time()
                         continue
 
-                    # 2. Regular T1/T2/T3 & SL Monitoring
+                    # 2. Strict T1/T2/T3 & SL Monitoring
                     if side == "BUY":
-                        # Target 3 Hit (Full Exit)
                         if current_price >= t3:
                             pnl = current_price - entry
                             active_trade["highest_target"] = 3
@@ -442,21 +476,18 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                        # Target 2 Hit
                         elif current_price >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Target 1 Hit (SL moved to Cost)
                         elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Stop Loss / Trailing SL Hit
                         elif current_price <= sl:
                             pnl = current_price - entry
                             active_trade["exit_price"] = current_price
@@ -474,7 +505,6 @@ def main():
                             save_daily_state(None)
 
                     elif side == "SELL":
-                        # Target 3 Hit (Full Exit)
                         if current_price <= t3:
                             pnl = entry - current_price
                             active_trade["highest_target"] = 3
@@ -486,21 +516,18 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                        # Target 2 Hit
                         elif current_price <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Target 1 Hit (SL moved to Cost)
                         elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Stop Loss / Trailing SL Hit
                         elif current_price >= sl:
                             pnl = entry - current_price
                             active_trade["exit_price"] = current_price
@@ -518,7 +545,7 @@ def main():
                             save_daily_state(None)
 
                 # ----------------------------------------------------
-                # SCENARIO B: SCAN FOR NEW SIGNALS (NO ACTIVE TRADE)
+                # SCENARIO B: SCAN FOR NEW TRADES (30-PT TARGET/SL)
                 # ----------------------------------------------------
                 else:
                     trigger = None
@@ -530,18 +557,18 @@ def main():
                     if trigger:
                         entry = current_price
                         entry_time_display = now.strftime('%I:%M:%S %p')
-                        risk_pts = 30.0
+                        fixed_risk = 30.0
 
                         if trigger == "BUY":
-                            sl = round(entry - risk_pts, 2)
-                            t1 = round(entry + risk_pts, 2)
-                            t2 = round(entry + (risk_pts * 2.0), 2)
-                            t3 = round(entry + (risk_pts * 3.0), 2)
+                            sl = round(entry - fixed_risk, 2)
+                            t1 = round(entry + fixed_risk, 2)
+                            t2 = round(entry + (fixed_risk * 2.0), 2)
+                            t3 = round(entry + (fixed_risk * 3.0), 2)
                         else:
-                            sl = round(entry + risk_pts, 2)
-                            t1 = round(entry - risk_pts, 2)
-                            t2 = round(entry - (risk_pts * 2.0), 2)
-                            t3 = round(entry - (risk_pts * 3.0), 2)
+                            sl = round(entry + fixed_risk, 2)
+                            t1 = round(entry - fixed_risk, 2)
+                            t2 = round(entry - (fixed_risk * 2.0), 2)
+                            t3 = round(entry - (fixed_risk * 3.0), 2)
 
                         active_trade = {
                             "date": today_date_str,
@@ -582,10 +609,11 @@ def main():
             save_daily_state(None)
             send_telegram_alert(f"🔔 <b>MARKET CLOSING (03:25 PM):</b> Open position closed ({pnl:+.2f} Pts).")
 
-        # 03:40 PM Reports (Joiners & Admin)
+        # 03:40 PM Reports Dispatch
         if current_time >= dtime(15, 40):
-            ledger = load_expiry_ledger()
-            today_trades = [t for t in ledger if t.get("date") == today_date_str]
+            # 1. Daily Report
+            weekly_ledger = load_ledger(WEEKLY_LEDGER_FILE)
+            today_trades = [t for t in weekly_ledger if t.get("date") == today_date_str]
             today_pnl = sum(t.get("pnl", 0.0) for t in today_trades)
 
             daily_summary = (
@@ -607,27 +635,52 @@ def main():
             except Exception as e:
                 logger.error(f"Daily PDF Error: {e}")
 
+            # 2. Weekly Expiry Report (Every Tuesday / Holiday Rule)
+            if is_today_weekly_expiry():
+                total_weekly_pnl = sum(t.get("pnl", 0.0) for t in weekly_ledger)
+                weekly_summary = (
+                    f"🎯 <b>WEEKLY EXPIRY SUMMARY (03:40 PM)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📅 Expiry Date: {today_str_display}\n"
+                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                    f"• Weekly Trades: {len(weekly_ledger)}\n"
+                    f"📈 Weekly Net Points: {total_weekly_pnl:+.2f} Pts\n"
+                    f"━━━━━━━━━━━━━━━━━━━━"
+                )
+                send_telegram_alert(weekly_summary)
+
+                weekly_pdf = f"Weekly_Expiry_Report_{today_str_display}.pdf"
+                try:
+                    generate_pdf_report(weekly_pdf, "WEEKLY EXPIRY REPORT", today_str_display, weekly_ledger, total_weekly_pnl)
+                    send_telegram_document(weekly_pdf, caption=f"📄 Weekly Expiry Report | Net: {total_weekly_pnl:+.2f} Pts")
+                    send_email_with_pdf(weekly_pdf, f"Weekly Expiry Report - {today_str_display}", weekly_summary)
+                    clear_ledger(WEEKLY_LEDGER_FILE)
+                except Exception as e:
+                    logger.error(f"Weekly PDF Error: {e}")
+
+            # 3. Monthly Expiry Report (Last Tuesday / Holiday Rule)
             if is_today_monthly_expiry():
-                total_cycle_pnl = sum(t.get("pnl", 0.0) for t in ledger)
-                expiry_summary = (
+                monthly_ledger = load_ledger(EXPIRY_LEDGER_FILE)
+                total_monthly_pnl = sum(t.get("pnl", 0.0) for t in monthly_ledger)
+                monthly_summary = (
                     f"🏆 <b>MONTHLY EXPIRY CYCLE REPORT (03:40 PM)</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📅 Expiry Date: {today_str_display}\n"
                     f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                    f"• Total Cycle Trades: {len(ledger)}\n"
-                    f"📈 Net Cycle Points: {total_cycle_pnl:+.2f} Pts\n"
+                    f"• Total Month Trades: {len(monthly_ledger)}\n"
+                    f"📈 Month Net Points: {total_monthly_pnl:+.2f} Pts\n"
                     f"━━━━━━━━━━━━━━━━━━━━"
                 )
-                send_telegram_alert(expiry_summary)
+                send_telegram_alert(monthly_summary)
 
-                expiry_pdf = f"Monthly_Expiry_Report_{today_str_display}.pdf"
+                monthly_pdf = f"Monthly_Expiry_Report_{today_str_display}.pdf"
                 try:
-                    generate_pdf_report(expiry_pdf, "MONTHLY EXPIRY CYCLE REPORT", today_str_display, ledger, total_cycle_pnl)
-                    send_telegram_document(expiry_pdf, caption=f"📄 Monthly Expiry Report | Net: {total_cycle_pnl:+.2f} Pts")
-                    send_email_with_pdf(expiry_pdf, f"Monthly Expiry Report - {today_str_display}", expiry_summary)
-                    clear_expiry_ledger()
+                    generate_pdf_report(monthly_pdf, "MONTHLY EXPIRY CYCLE REPORT", today_str_display, monthly_ledger, total_monthly_pnl)
+                    send_telegram_document(monthly_pdf, caption=f"📄 Monthly Expiry Report | Net: {total_monthly_pnl:+.2f} Pts")
+                    send_email_with_pdf(monthly_pdf, f"Monthly Expiry Report - {today_str_display}", monthly_summary)
+                    clear_ledger(EXPIRY_LEDGER_FILE)
                 except Exception as e:
-                    logger.error(f"Expiry PDF Error: {e}")
+                    logger.error(f"Monthly PDF Error: {e}")
 
             send_admin_alert("🛑 <b>MARKET CLOSED:</b> Engine stopped successfully.")
             break
