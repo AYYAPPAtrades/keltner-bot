@@ -12,9 +12,6 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime, timedelta, time as dtime
 from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
-import yfinance as yf
-from nselib import capital_market
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -33,21 +30,16 @@ logger = logging.getLogger("SAS_TRACKER")
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004416495917")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
 PUBLIC_ALERT_IDS = [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
 
-# Email Configuration
 SENDER_EMAIL = "shinos99@gmail.com"
 SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
 RECEIVER_EMAILS = ["shinos99@gmail.com"]
 
 STRATEGY_DISPLAY_NAME = "SAS LEVEL PULSE"
-INDEX_WATCHLIST = ["NIFTY 50"]
-YF_TICKERS = {"NIFTY 50": "^NSEI"}
-
 DAILY_STATE_FILE = "daily_active_trades.json"
 EXPIRY_LEDGER_FILE = "expiry_trades_ledger.json"
 
@@ -55,13 +47,53 @@ telegram_session = requests.Session()
 executor = ThreadPoolExecutor(max_workers=4)
 
 # ==========================================
-# 2. DISPATCH FUNCTIONS
+# 2. ULTRA-FAST NSE LIVE SESSION
+# ==========================================
+class FastNSELive:
+    def __init__(self):
+        self.session = requests.Session()
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        self.last_cookie_time = 0
+        self.refresh_cookies()
+
+    def refresh_cookies(self):
+        try:
+            self.session.get("https://www.nseindia.com", headers=self.headers, timeout=5)
+            self.last_cookie_time = time.time()
+        except Exception:
+            pass
+
+    def get_nifty_price(self):
+        if time.time() - self.last_cookie_time > 300:
+            self.refresh_cookies()
+        try:
+            url = "https://www.nseindia.com/api/allIndices"
+            resp = self.session.get(url, headers=self.headers, timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data.get("data", []):
+                    if item.get("index") == "NIFTY 50":
+                        return float(str(item.get("last")).replace(",", ""))
+            elif resp.status_code in [401, 403]:
+                self.refresh_cookies()
+        except Exception:
+            pass
+        return None
+
+nse_live = FastNSELive()
+
+# ==========================================
+# 3. DISPATCH FUNCTIONS (ASYNC NO WAIT)
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
     try:
-        telegram_session.post(url, json=payload, timeout=10)
+        telegram_session.post(url, json=payload, timeout=5)
     except Exception as e:
         logger.error(f"[TELEGRAM ERROR] {cid}: {e}")
 
@@ -107,47 +139,19 @@ def send_email_with_pdf(file_path, subject, body):
         logger.error(f"Email Dispatch Warning: {e}")
 
 # ==========================================
-# 3. NSE HOLIDAYS & DYNAMIC EXPIRY DETECTION
+# 4. HOLIDAYS & EXPIRY DETECTION
 # ==========================================
-def get_nse_holidays():
-    try:
-        holidays_df = capital_market.holiday_trading()
-        if holidays_df is not None and not holidays_df.empty and 'tradingDate' in holidays_df.columns:
-            return [datetime.strptime(d, '%d-%b-%Y').date() for d in holidays_df['tradingDate'].values]
-    except Exception:
-        pass
-    return []
-
-holiday_dates = get_nse_holidays()
-today_dt = datetime.now(IST)
-today_date = today_dt.date()
-today_str_display = today_dt.strftime('%d-%b-%Y')
-
-if today_dt.weekday() in [5, 6]:
-    day_name = "Saturday" if today_dt.weekday() == 5 else "Sunday"
-    send_telegram_alert(f"🏖️ <b>WEEKEND MARKET HOLIDAY ({day_name})</b>\n• Market is closed today.")
-    sys.exit(0)
-
-if today_date in holiday_dates:
-    send_telegram_alert(f"🏖️ <b>NSE MARKET HOLIDAY TODAY ({today_str_display})</b>\n• Market is closed.")
-    sys.exit(0)
-
 def is_today_monthly_expiry():
     today = datetime.now(IST).date()
     next_month = today.replace(day=28) + timedelta(days=4)
     last_day_of_month = next_month - timedelta(days=next_month.day)
-    
     target_day = last_day_of_month
     while target_day.weekday() != 1:  # Tuesday
         target_day -= timedelta(days=1)
-        
-    while target_day in holiday_dates or target_day.weekday() in [5, 6]:
-        target_day -= timedelta(days=1)
-        
     return today == target_day
 
 # ==========================================
-# 4. DATA BACKUP & LEDGER
+# 5. STATE & LEDGER BACKUP
 # ==========================================
 def load_backup_state():
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
@@ -195,7 +199,7 @@ def clear_expiry_ledger():
         pass
 
 # ==========================================
-# 5. PDF REPORT GENERATION
+# 6. PDF REPORT GENERATION
 # ==========================================
 def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
@@ -244,40 +248,20 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc.build(elements)
 
 # ==========================================
-# 6. LIVE MARKET DATA HELPERS
-# ==========================================
-def fetch_recent_data():
-    try:
-        df = yf.download(tickers=YF_TICKERS["NIFTY 50"], period="1d", interval="1m", progress=False)
-        if not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            return df
-    except Exception as e:
-        logger.error(f"Data fetch error: {e}")
-    return None
-
-def get_live_nifty_price():
-    try:
-        all_indices = capital_market.market_watch_all_indices()
-        if all_indices is not None and not all_indices.empty:
-            nifty_row = all_indices[all_indices['index'] == 'NIFTY 50']
-            if not nifty_row.empty:
-                return float(str(nifty_row['last'].values[0]).replace(',', ''))
-    except Exception:
-        pass
-    return None
-
-# ==========================================
-# 7. MAIN ENGINE (FAST SPIKE SCANNER)
+# 7. MAIN INSTANT ENGINE
 # ==========================================
 def main():
-    logger.info("Initializing SAS Level Pulse (Fast Momentum Breakout Engine)...")
+    logger.info("Starting Instant Pulse Engine (Zero Delay Live Tick)...")
 
     startup_alert_sent = False
     active_trade = load_backup_state()
     last_heartbeat_hour = -1
     today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+    today_str_display = datetime.now(IST).strftime('%d-%b-%Y')
+
+    ref_high = None
+    ref_low = None
+    last_eval_time = 0
 
     while True:
         now = datetime.now(IST)
@@ -289,24 +273,23 @@ def main():
                 f"🚀 <b>{STRATEGY_DISPLAY_NAME} LIVE</b>\n"
                 f"⏰ Time: {now.strftime('%I:%M:%S %p')} IST\n"
                 f"📊 Index: NIFTY 50\n"
-                f"⚡ Status: Fast Momentum Spike Engine Active"
+                f"⚡ Status: Zero-Delay Instant Scanner Active"
             )
             send_telegram_alert(startup_msg)
             startup_alert_sent = True
 
         # Active Scanning Window (09:15 AM - 03:25 PM)
         if dtime(9, 15) <= current_time <= dtime(15, 25):
-            df = fetch_recent_data()
-            live_price = get_live_nifty_price()
+            current_price = nse_live.get_nifty_price()
 
-            if df is not None and len(df) >= 3:
-                current_price = live_price if live_price else float(df['Close'].iloc[-1])
-                
-                # Fast Breakout: തൊട്ടു മുൻപത്തെ കാൻഡിലിന്റെ ഹൈയും ലോയും വെച്ചുള്ള സ്പൈക്ക് എൻട്രി
-                prev_candle_high = float(df['High'].iloc[-2])
-                prev_candle_low = float(df['Low'].iloc[-2])
+            if current_price:
+                # Reference High/Low setup for fast momentum breakout
+                if ref_high is None or (time.time() - last_eval_time > 60):
+                    ref_high = current_price + 3.0
+                    ref_low = current_price - 3.0
+                    last_eval_time = time.time()
 
-                # --- STEP A: MONITOR RUNNING TRADE ---
+                # --- STEP A: MONITOR ACTIVE TRADE ---
                 if active_trade is not None:
                     side = active_trade["side"]
                     entry = active_trade["entry"]
@@ -335,8 +318,8 @@ def main():
 
                         elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL safely moved to Cost ({entry:.2f}).")
+                            active_trade["sl"] = entry  # Trailing SL to Cost
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
                         elif current_price <= sl:
@@ -375,8 +358,8 @@ def main():
 
                         elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL safely moved to Cost ({entry:.2f}).")
+                            active_trade["sl"] = entry  # Trailing SL to Cost
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
                         elif current_price >= sl:
@@ -397,16 +380,16 @@ def main():
 
                 # --- STEP B: CHECK SIGNALS & REVERSAL SWITCHING ---
                 trigger = None
-                if current_price > prev_candle_high:
+                if current_price > ref_high:
                     trigger = "BUY"
-                elif current_price < prev_candle_low:
+                elif current_price < ref_low:
                     trigger = "SELL"
 
-                # Reversal Logic: നിലവിലെ ട്രേഡിന്റെ വിപരീത ദിശയിൽ ബ്രേക്ക്ഔട്ട് ഉണ്ടായാൽ ഉടൻ സ്വിച്ച് ചെയ്യുന്നു
+                # Reversal Logic (Opposite breakout triggers instant switch)
                 if trigger and active_trade is not None and active_trade["side"] != trigger:
                     rev_pnl = (current_price - active_trade["entry"]) if active_trade["side"] == "BUY" else (active_trade["entry"] - current_price)
                     status_text = f"T{active_trade['highest_target']} Achieved (Reversal Exit)" if active_trade.get("highest_target", 0) >= 1 else "Closed due to Reversal"
-                    
+
                     active_trade["status"] = status_text
                     active_trade["exit_price"] = current_price
                     active_trade["pnl"] = rev_pnl
@@ -418,16 +401,16 @@ def main():
                         f"💵 Exit Price: {current_price:.2f}\n"
                         f"✅ Status: {status_text}\n"
                         f"📊 P/L: {rev_pnl:+.2f} Pts\n"
-                        f"⚠️ Trend reversed! Opening new position immediately."
+                        f"⚠️ Market trend reversed! Switching immediately."
                     )
                     active_trade = None
                     save_daily_state(None)
 
-                # പുതിയ എൻട്രി എടുക്കൽ
+                # New Trade Entry
                 if trigger and active_trade is None:
                     entry = current_price
                     entry_time_display = now.strftime('%I:%M:%S %p')
-                    risk_pts = 30.0  # 30 Points Stop Loss & 1:1, 1:2, 1:3 Targets
+                    risk_pts = 30.0
 
                     if trigger == "BUY":
                         sl = round(entry - risk_pts, 2)
@@ -454,7 +437,6 @@ def main():
                     }
                     save_daily_state(active_trade)
 
-                    # ക്ലീൻ അലേർട്ട് ഫോർമാറ്റ്
                     msg = (
                         f"⚡ <b>{trigger} SIGNAL</b>\n\n"
                         f"• <b>Entry:</b> {entry:.2f}\n"
@@ -467,7 +449,7 @@ def main():
                     )
                     send_telegram_alert(msg)
 
-                # മണിക്കൂർ തോറുമുള്ള അപ്‌ഡേറ്റ്
+                # Hourly Status
                 if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
                     last_heartbeat_hour = now.hour
                     hb_msg = f"💓 <b>HOURLY UPDATE</b>\n⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n• NIFTY 50: {current_price:.2f}"
@@ -476,7 +458,7 @@ def main():
         # 03:25 PM Auto Square Off
         if current_time >= dtime(15, 25) and active_trade is not None:
             entry = active_trade["entry"]
-            last_prc = current_price if 'current_price' in locals() else entry
+            last_prc = current_price if 'current_price' in locals() and current_price else entry
             pnl = (last_prc - entry) if active_trade["side"] == "BUY" else (entry - last_prc)
             active_trade["status"] = "EOD Auto-Exit"
             active_trade["exit_price"] = last_prc
@@ -486,13 +468,12 @@ def main():
             save_daily_state(None)
             send_telegram_alert(f"🔔 <b>MARKET CLOSING (03:25 PM):</b> Open position closed ({pnl:+.2f} Pts).")
 
-        # 03:40 PM Reports (Daily & Monthly)
+        # 03:40 PM Reports
         if current_time >= dtime(15, 40):
             ledger = load_expiry_ledger()
             today_trades = [t for t in ledger if t.get("date") == today_date_str]
             today_pnl = sum(t.get("pnl", 0.0) for t in today_trades)
-            
-            # 1. DAILY REPORT
+
             daily_summary = (
                 f"📊 <b>DAILY PERFORMANCE SUMMARY (03:40 PM)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -512,7 +493,6 @@ def main():
             except Exception as e:
                 logger.error(f"Daily PDF Error: {e}")
 
-            # 2. MONTHLY EXPIRY TO EXPIRY REPORT
             if is_today_monthly_expiry():
                 total_cycle_pnl = sum(t.get("pnl", 0.0) for t in ledger)
                 expiry_summary = (
@@ -538,7 +518,7 @@ def main():
             send_telegram_alert("🛑 <b>MARKET CLOSED:</b> Engine stopped.")
             break
 
-        time.sleep(1)
+        time.sleep(0.5)
 
 if __name__ == "__main__":
     main()
