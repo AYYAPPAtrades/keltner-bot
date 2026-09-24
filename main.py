@@ -326,11 +326,9 @@ def main():
         # 09:00 AM Engine Alert
         if current_time >= dtime(9, 0) and not startup_alert_sent:
             startup_msg = (
-                f"🚀 <b>SAS LEVEL TRACKER LIVE (09:00 AM)</b>\n\n"
-                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
-                f"📊 <b>Index:</b> NIFTY 50\n"
-                f"🕒 <b>Time:</b> {now.strftime('%I:%M:%S %p')} IST\n"
-                f"🛡️ <b>Engine Status:</b> Fast Real-Time Scanner Active."
+                f"🚀 <b>SAS LEVEL TRACKER LIVE</b>\n"
+                f"⏰ Time: {now.strftime('%I:%M:%S %p')} IST\n"
+                f"📊 Index: NIFTY 50"
             )
             send_telegram_alert(startup_msg)
             startup_alert_sent = True
@@ -338,17 +336,15 @@ def main():
         # 09:05 AM - Levels Alert
         if current_time >= dtime(9, 5) and not levels_posted:
             msg = (
-                f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
+                f"⚡ <b>DAILY LEVELS (09:05 AM)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Index:</b> NIFTY 50\n"
-                f"🔹 <b>Bullish Breakout (R4):</b> {levels['H4']:.2f}\n"
-                f"🔹 <b>Resistance Reversal (R3):</b> {levels['H3']:.2f}\n"
-                f"🔸 <b>Support Reversal (S3):</b> {levels['L3']:.2f}\n"
-                f"🔸 <b>Bearish Breakdown (S4):</b> {levels['L4']:.2f}\n"
-                f"🛡️ <b>Day Dynamic Risk:</b> {dynamic_risk:.2f} Pts\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Tracking live tick-by-tick momentum.</i>\n"
-                f"⚠️ <i>Strictly for educational study only. Not SEBI registered.</i>"
+                f"📊 Index: NIFTY 50\n"
+                f"🔹 R4: {levels['H4']:.2f}\n"
+                f"🔹 R3: {levels['H3']:.2f}\n"
+                f"🔸 S3: {levels['L3']:.2f}\n"
+                f"🔸 S4: {levels['L4']:.2f}\n"
+                f"🛡️ Risk: {dynamic_risk:.2f} Pts\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
             )
             send_telegram_alert(msg)
             levels_posted = True
@@ -379,7 +375,7 @@ def main():
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [BUY]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
 
@@ -388,7 +384,7 @@ def main():
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [BUY]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts")
                             save_daily_state(active_trade)
 
                         elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
@@ -396,7 +392,7 @@ def main():
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed safely to Cost ({entry:.2f}). T2 & T3 Active!")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [BUY]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Cost.")
                             save_daily_state(active_trade)
 
                         elif current_tick <= sl:
@@ -406,13 +402,13 @@ def main():
                                 active_trade["status"] = f"Target {target_num} Achieved"
                                 active_trade["exit_price"] = active_trade[f"t{target_num}"]
                                 active_trade["pnl"] = booked_pnl
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nPrice: {current_tick:.2f}\nExited with profit booked at Target {target_num} (+{booked_pnl:.2f} Pts).")
+                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nSpot: {current_tick:.2f}\nPoints: +{booked_pnl:.2f} Pts")
                             else:
                                 pnl = sl - entry
                                 active_trade["exit_price"] = sl
                                 active_trade["pnl"] = pnl
                                 active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {current_tick:.2f}\nPoints: {pnl:.2f} Pts")
                                 sl_cooldown_until = now + timedelta(minutes=3)
                                 last_sl_side = "BUY"
 
@@ -428,7 +424,7 @@ def main():
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [SELL]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
 
@@ -437,7 +433,7 @@ def main():
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [SELL]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts")
                             save_daily_state(active_trade)
 
                         elif current_tick <= t1 and active_trade.get("highest_target", 0) < 1:
@@ -445,7 +441,7 @@ def main():
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
                             active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed safely to Cost ({entry:.2f}). T2 & T3 Active!")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [SELL]</b>\nSpot: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Cost.")
                             save_daily_state(active_trade)
 
                         elif current_tick >= sl:
@@ -455,13 +451,13 @@ def main():
                                 active_trade["status"] = f"Target {target_num} Achieved"
                                 active_trade["exit_price"] = active_trade[f"t{target_num}"]
                                 active_trade["pnl"] = booked_pnl
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nPrice: {current_tick:.2f}\nExited with profit booked at Target {target_num} (+{booked_pnl:.2f} Pts).")
+                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nSpot: {current_tick:.2f}\nPoints: +{booked_pnl:.2f} Pts")
                             else:
                                 pnl = entry - sl
                                 active_trade["exit_price"] = sl
                                 active_trade["pnl"] = pnl
                                 active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {current_tick:.2f}\nPoints: {pnl:.2f} Pts")
                                 sl_cooldown_until = now + timedelta(minutes=3)
                                 last_sl_side = "SELL"
 
@@ -500,7 +496,7 @@ def main():
                         record_trade_to_ledger(active_trade)
                         send_telegram_alert(
                             f"🔄 <b>POSITION SWITCHED TO {trigger}!</b>\n"
-                            f"Old {active_trade['side']} position safely closed with Target {target_num} profit (+{booked_pnl:.2f} Pts)."
+                            f"Old {active_trade['side']} position closed (+{booked_pnl:.2f} Pts)."
                         )
                         active_trade = None
                         save_daily_state(None)
@@ -538,18 +534,16 @@ def main():
                     }
                     save_daily_state(active_trade)
 
+                    # കൃത്യമായി ചോദിച്ച സിമ്പിൾ ഫോർമാറ്റ്
                     msg = (
-                        f"⚡ <b>SAS LEVEL TRACKER SIGNAL</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 <b>Index:</b> NIFTY 50\n"
-                        f"🎯 <b>Action:</b> {trigger}\n"
-                        f"⏰ <b>Entry Time:</b> {entry_time_display} IST\n"
-                        f"🔹 <b>Entry:</b> {entry:.2f}\n"
-                        f"🛑 <b>Stop Loss:</b> {sl:.2f}\n"
-                        f"🎯 <b>Target 1:</b> {t1:.2f}\n"
-                        f"🎯 <b>Target 2:</b> {t2:.2f}\n"
-                        f"🎯 <b>Target 3:</b> {t3:.2f}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━"
+                        f"⚡ <b>{trigger} SIGNAL</b>\n\n"
+                        f"• <b>Entry:</b> {entry:.2f}\n"
+                        f"• <b>Entry Time:</b> {entry_time_display} IST\n"
+                        f"• <b>Spot:</b> {current_tick:.2f}\n"
+                        f"• <b>Stop Loss:</b> {sl:.2f}\n"
+                        f"• <b>T1:</b> {t1:.2f}\n"
+                        f"• <b>T2:</b> {t2:.2f}\n"
+                        f"• <b>T3:</b> {t3:.2f}"
                     )
                     send_telegram_alert(msg)
 
@@ -558,9 +552,9 @@ def main():
                     diff = current_tick - close
                     pct = (diff / close) * 100 if close != 0 else 0.0
                     hb_msg = (
-                        f"💓 <b>HOURLY STATUS ALERT</b>\n"
-                        f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n\n"
-                        f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
+                        f"💓 <b>HOURLY UPDATE</b>\n"
+                        f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n"
+                        f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)"
                     )
                     send_telegram_alert(hb_msg)
 
@@ -591,10 +585,9 @@ def main():
             daily_summary = (
                 f"📊 <b>DAILY PERFORMANCE SUMMARY (03:40 PM)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 <b>Date:</b> {today_str_display}\n"
-                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
+                f"📅 Date: {today_str_display}\n"
                 f"• Today Trades: {len(today_trades)}\n"
-                f"📈 <b>Day Net Points:</b> {today_pnl:+.2f} Pts\n"
+                f"📈 Day Net Points: {today_pnl:+.2f} Pts\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"<i>Dispatching Daily Analytical PDF Report...</i>"
             )
@@ -614,10 +607,9 @@ def main():
                 monthly_summary = (
                     f"🏆 <b>MONTHLY EXPIRY CYCLE REPORT (03:40 PM)</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📅 <b>Expiry Date:</b> {today_str_display}\n"
-                    f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
+                    f"📅 Expiry Date: {today_str_display}\n"
                     f"• Total Month Crossovers: {len(ledger)}\n"
-                    f"📈 <b>Net Cycle Points:</b> {total_cycle_pnl:+.2f} Pts\n"
+                    f"📈 Net Cycle Points: {total_cycle_pnl:+.2f} Pts\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"<i>Dispatching Complete Expiry Ledger PDF...</i>"
                 )
@@ -632,7 +624,7 @@ def main():
                 except Exception as e:
                     logger.error(f"Expiry PDF Generation Error: {e}")
 
-            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Tracker shutting down safely.")
+            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> Bot shutting down safely.")
             break
 
         time.sleep(1)
