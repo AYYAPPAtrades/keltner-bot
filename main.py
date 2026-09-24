@@ -89,7 +89,7 @@ class FastNSELive:
 nse_live = FastNSELive()
 
 # ==========================================
-# 3. TELEGRAM & EMAIL DISPATCH
+# 3. ZERO-DELAY TELEGRAM & EMAIL DISPATCH
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -377,10 +377,10 @@ def main():
             current_price = nse_live.get_nifty_price()
 
             if current_price:
-                # Reference Channel Evaluation (Dynamic Momentum Detection)
-                if ref_high is None or (time.time() - last_eval_time > 60):
-                    ref_high = current_price + 3.0
-                    ref_low = current_price - 3.0
+                # Fast Scalping: 1.5 Pt Sensitivity & 20s Update Window
+                if ref_high is None or (time.time() - last_eval_time > 20):
+                    ref_high = current_price + 1.5
+                    ref_low = current_price - 1.5
                     last_eval_time = time.time()
 
                 # ----------------------------------------------------
@@ -458,8 +458,8 @@ def main():
                             f"• <b>T3:</b> {new_t3:.2f}"
                         )
                         send_telegram_alert(rev_signal_msg)
-                        ref_high = current_price + 3.0
-                        ref_low = current_price - 3.0
+                        ref_high = current_price + 1.5
+                        ref_low = current_price - 1.5
                         last_eval_time = time.time()
                         continue
 
