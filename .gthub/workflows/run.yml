@@ -1,17 +1,16 @@
-name: Dual Strategy Scanner
+name: run-bot
 
 on:
   schedule:
-    - cron: '30 3 * * 1-5' # 9:00 AM IST (Pre-market & Daily Levels)
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    # Monday to Friday at 09:00 AM IST (03:30 AM UTC)
+    - cron: '30 3 * * 1-5'
+  workflow_dispatch: # മാന്വലായി റൺ ചെയ്യാനുള്ള ബട്ടൺ
 
 jobs:
-  run-bot:
+  run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 400
+    timeout-minutes: 420  # 7 മണിക്കൂർ വരെ തടസ്സമില്ലാതെ റൺ ആകാൻ
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -20,30 +19,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
-          pip install --upgrade pip
-          pip install requests pandas yfinance nselib reportlab
+          python -m pip install --upgrade pip
+          pip install requests pytz numpy pandas yfinance reportlab nselib
 
       - name: Run Scanner
+        env:
+          PYTHONUNBUFFERED: "1"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
         run: |
           python main.py
-                - name: Commit and push backup files
-        if: always()
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add daily_active_trades.json expiry_trades_ledger.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update daily trading state [skip ci]" && git push)
-
-
-      # ബോട്ട് റൺ കഴിഞ്ഞാലോ ഇടയ്ക്ക് വെച്ച് കട്ട് ആയാലോ ഡാറ്റ നഷ്ടപ്പെടാതെ സേവ് ചെയ്യുന്ന സ്റ്റെപ്പ്:
-      - name: Auto Save Ledger to GitHub
-        if: always()
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add expiry_trades_ledger.json daily_active_trades.json || true
-          git commit -m "Auto-save ledger state [skip ci]" || echo "No changes to commit"
-          git push
