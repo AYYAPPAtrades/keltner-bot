@@ -87,7 +87,7 @@ class FastNSELive:
 nse_live = FastNSELive()
 
 # ==========================================
-# 3. DISPATCH FUNCTIONS (ASYNC NO WAIT)
+# 3. DISPATCH FUNCTIONS
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -146,7 +146,7 @@ def is_today_monthly_expiry():
     next_month = today.replace(day=28) + timedelta(days=4)
     last_day_of_month = next_month - timedelta(days=next_month.day)
     target_day = last_day_of_month
-    while target_day.weekday() != 1:  # Tuesday
+    while target_day.weekday() != 1:
         target_day -= timedelta(days=1)
     return today == target_day
 
@@ -248,13 +248,14 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc.build(elements)
 
 # ==========================================
-# 7. MAIN INSTANT ENGINE
+# 7. MAIN ENGINE (STRICT POSITION LOCK)
 # ==========================================
 def main():
-    logger.info("Starting Instant Pulse Engine (Zero Delay Live Tick)...")
+    logger.info("Starting SAS Level Pulse Engine (Strict T1/SL Wait Mode)...")
 
-    startup_alert_sent = False
+    # റീസ്റ്റാർട്ട് ആയാലും ആക്റ്റീവ് ട്രേഡ് നിലനിർത്തുന്നു
     active_trade = load_backup_state()
+    startup_alert_sent = False
     last_heartbeat_hour = -1
     today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
     today_str_display = datetime.now(IST).strftime('%d-%b-%Y')
@@ -267,13 +268,13 @@ def main():
         now = datetime.now(IST)
         current_time = now.time()
 
-        # 09:00 AM Engine Alert
-        if current_time >= dtime(9, 0) and not startup_alert_sent:
+        # 09:00 AM Engine Alert (റീസ്റ്റാർട്ടിൽ ഡ്യൂപ്ലിക്കേറ്റ് വരാതിരിക്കാൻ)
+        if current_time >= dtime(9, 0) and not startup_alert_sent and current_time < dtime(9, 15):
             startup_msg = (
                 f"🚀 <b>{STRATEGY_DISPLAY_NAME} LIVE</b>\n"
                 f"⏰ Time: {now.strftime('%I:%M:%S %p')} IST\n"
                 f"📊 Index: NIFTY 50\n"
-                f"⚡ Status: Zero-Delay Instant Scanner Active"
+                f"⚡ Status: Scanner Active"
             )
             send_telegram_alert(startup_msg)
             startup_alert_sent = True
@@ -283,13 +284,9 @@ def main():
             current_price = nse_live.get_nifty_price()
 
             if current_price:
-                # Reference High/Low setup for fast momentum breakout
-                if ref_high is None or (time.time() - last_eval_time > 60):
-                    ref_high = current_price + 3.0
-                    ref_low = current_price - 3.0
-                    last_eval_time = time.time()
-
-                # --- STEP A: MONITOR ACTIVE TRADE ---
+                # ----------------------------------------------------
+                # SCENARIO A: നിലവിലുള്ള ട്രേഡ് മോണിറ്റർ ചെയ്യുക
+                # ----------------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
                     entry = active_trade["entry"]
@@ -299,6 +296,7 @@ def main():
                     sl = active_trade["sl"]
 
                     if side == "BUY":
+                        # Hit Target 3 (പൂർണ്ണ എക്സിറ്റ്)
                         if current_price >= t3:
                             pnl = current_price - entry
                             active_trade["highest_target"] = 3
@@ -310,18 +308,21 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
+                        # Hit Target 2
                         elif current_price >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
+                        # Hit Target 1 (SL നേരെ Cost-ലേക്ക്)
                         elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry  # Trailing SL to Cost
+                            active_trade["sl"] = entry
                             send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
+                        # Hit SL / Trailing SL
                         elif current_price <= sl:
                             pnl = current_price - entry
                             active_trade["exit_price"] = current_price
@@ -339,6 +340,7 @@ def main():
                             save_daily_state(None)
 
                     elif side == "SELL":
+                        # Hit Target 3 (പൂർണ്ണ എക്സിറ്റ്)
                         if current_price <= t3:
                             pnl = entry - current_price
                             active_trade["highest_target"] = 3
@@ -350,18 +352,21 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
+                        # Hit Target 2
                         elif current_price <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
+                        # Hit Target 1 (SL നേരെ Cost-ലേക്ക്)
                         elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry  # Trailing SL to Cost
+                            active_trade["sl"] = entry
                             send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
+                        # Hit SL / Trailing SL
                         elif current_price >= sl:
                             pnl = entry - current_price
                             active_trade["exit_price"] = current_price
@@ -378,76 +383,62 @@ def main():
                             active_trade = None
                             save_daily_state(None)
 
-                # --- STEP B: CHECK SIGNALS & REVERSAL SWITCHING ---
-                trigger = None
-                if current_price > ref_high:
-                    trigger = "BUY"
-                elif current_price < ref_low:
-                    trigger = "SELL"
+                # ----------------------------------------------------
+                # SCENARIO B: പുതിയ ട്രേഡ് സ്കാനിംഗ് (ആക്റ്റീവ് ട്രേഡ് ഇല്ലെങ്കിൽ മാത്രം)
+                # ----------------------------------------------------
+                else:
+                    if ref_high is None or (time.time() - last_eval_time > 60):
+                        ref_high = current_price + 3.0
+                        ref_low = current_price - 3.0
+                        last_eval_time = time.time()
 
-                # Reversal Logic (Opposite breakout triggers instant switch)
-                if trigger and active_trade is not None and active_trade["side"] != trigger:
-                    rev_pnl = (current_price - active_trade["entry"]) if active_trade["side"] == "BUY" else (active_trade["entry"] - current_price)
-                    status_text = f"T{active_trade['highest_target']} Achieved (Reversal Exit)" if active_trade.get("highest_target", 0) >= 1 else "Closed due to Reversal"
+                    trigger = None
+                    if current_price > ref_high:
+                        trigger = "BUY"
+                    elif current_price < ref_low:
+                        trigger = "SELL"
 
-                    active_trade["status"] = status_text
-                    active_trade["exit_price"] = current_price
-                    active_trade["pnl"] = rev_pnl
-                    record_trade_to_ledger(active_trade)
+                    if trigger:
+                        entry = current_price
+                        entry_time_display = now.strftime('%I:%M:%S %p')
+                        risk_pts = 30.0
 
-                    send_telegram_alert(
-                        f"🔄 <b>REVERSAL EXIT (PREVIOUS TRADE)</b>\n"
-                        f"📍 Index: NIFTY 50 ({active_trade['side']})\n"
-                        f"💵 Exit Price: {current_price:.2f}\n"
-                        f"✅ Status: {status_text}\n"
-                        f"📊 P/L: {rev_pnl:+.2f} Pts\n"
-                        f"⚠️ Market trend reversed! Switching immediately."
-                    )
-                    active_trade = None
-                    save_daily_state(None)
+                        if trigger == "BUY":
+                            sl = round(entry - risk_pts, 2)
+                            t1 = round(entry + risk_pts, 2)
+                            t2 = round(entry + (risk_pts * 2.0), 2)
+                            t3 = round(entry + (risk_pts * 3.0), 2)
+                        else:
+                            sl = round(entry + risk_pts, 2)
+                            t1 = round(entry - risk_pts, 2)
+                            t2 = round(entry - (risk_pts * 2.0), 2)
+                            t3 = round(entry - (risk_pts * 3.0), 2)
 
-                # New Trade Entry
-                if trigger and active_trade is None:
-                    entry = current_price
-                    entry_time_display = now.strftime('%I:%M:%S %p')
-                    risk_pts = 30.0
+                        active_trade = {
+                            "date": today_date_str,
+                            "index": "NIFTY 50",
+                            "side": trigger,
+                            "entry": entry,
+                            "sl": sl,
+                            "t1": t1,
+                            "t2": t2,
+                            "t3": t3,
+                            "highest_target": 0,
+                            "time": entry_time_display
+                        }
+                        save_daily_state(active_trade)
 
-                    if trigger == "BUY":
-                        sl = round(entry - risk_pts, 2)
-                        t1 = round(entry + risk_pts, 2)
-                        t2 = round(entry + (risk_pts * 2.0), 2)
-                        t3 = round(entry + (risk_pts * 3.0), 2)
-                    else:
-                        sl = round(entry + risk_pts, 2)
-                        t1 = round(entry - risk_pts, 2)
-                        t2 = round(entry - (risk_pts * 2.0), 2)
-                        t3 = round(entry - (risk_pts * 3.0), 2)
-
-                    active_trade = {
-                        "date": today_date_str,
-                        "index": "NIFTY 50",
-                        "side": trigger,
-                        "entry": entry,
-                        "sl": sl,
-                        "t1": t1,
-                        "t2": t2,
-                        "t3": t3,
-                        "highest_target": 0,
-                        "time": entry_time_display
-                    }
-                    save_daily_state(active_trade)
-
-                    msg = (
-                        f"⚡ <b>{trigger} SIGNAL</b>\n\n"
-                        f"• <b>Entry:</b> {entry:.2f}\n"
-                        f"• <b>Entry Time:</b> {entry_time_display} IST\n"
-                        f"• <b>Spot:</b> {current_price:.2f}\n"
-                        f"• <b>Stop Loss:</b> {sl:.2f}\n"
-                        f"• <b>T1:</b> {t1:.2f}\n"
-                        f"• <b>T2:</b> {t2:.2f}\n"
-                        f"• <b>T3:</b> {t3:.2f}"
-                    )
-                    send_telegram_alert(msg)
+                        msg = (
+                            f"⚡ <b>{trigger} SIGNAL</b>\n\n"
+                            f"• <b>Entry:</b> {entry:.2f}\n"
+                            f"• <b>Entry Time:</b> {entry_time_display} IST\n"
+                            f"• <b>Spot:</b> {current_price:.2f}\n"
+                            f"• <b>Stop Loss:</b> {sl:.2f}\n"
+                            f"• <b>T1:</b> {t1:.2f}\n"
+                            f"• <b>T2:</b> {t2:.2f}\n"
+                            f"• <b>T3:</b> {t3:.2f}"
+                        )
+                        send_telegram_alert(msg)
 
                 # Hourly Status
                 if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
