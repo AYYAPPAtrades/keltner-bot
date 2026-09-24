@@ -87,7 +87,7 @@ class FastNSELive:
 nse_live = FastNSELive()
 
 # ==========================================
-# 3. DISPATCH FUNCTIONS
+# 3. DISPATCH & TELEGRAM SYNC FUNCTIONS
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -138,6 +138,61 @@ def send_email_with_pdf(file_path, subject, body):
     except Exception as e:
         logger.error(f"Email Dispatch Warning: {e}")
 
+# സെർവർ റീസ്റ്റാർട്ട് ആയാലും ടെലിഗ്രാമിൽ നിന്ന് ആക്റ്റീവ് ട്രേഡ് വീണ്ടെടുക്കുന്നു
+def sync_active_trade_from_telegram():
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
+        return None
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset=-10"
+        resp = requests.get(url, timeout=5).json()
+        if resp.get("ok") and resp.get("result"):
+            messages = resp.get("result")
+            last_signal = None
+            has_closed = False
+
+            for item in reversed(messages):
+                msg = item.get("channel_post") or item.get("message")
+                if not msg or "text" not in msg:
+                    continue
+                text = msg["text"]
+
+                if "TARGET 1 HIT" in text or "STOP LOSS HIT" in text or "TRAILING STOP" in text or "MARKET CLOSING" in text:
+                    has_closed = True
+                    break
+
+                if ("BUY SIGNAL" in text or "SELL SIGNAL" in text) and not has_closed:
+                    lines = text.split("\n")
+                    side = "BUY" if "BUY SIGNAL" in text else "SELL"
+                    entry, sl, t1, t2, t3 = 0, 0, 0, 0, 0
+                    for line in lines:
+                        if "Entry:" in line:
+                            entry = float(line.split(":")[-1].strip())
+                        elif "Stop Loss:" in line:
+                            sl = float(line.split(":")[-1].strip())
+                        elif "T1:" in line:
+                            t1 = float(line.split(":")[-1].strip())
+                        elif "T2:" in line:
+                            t2 = float(line.split(":")[-1].strip())
+                        elif "T3:" in line:
+                            t3 = float(line.split(":")[-1].strip())
+
+                    if entry > 0:
+                        return {
+                            "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                            "index": "NIFTY 50",
+                            "side": side,
+                            "entry": entry,
+                            "sl": sl,
+                            "t1": t1,
+                            "t2": t2,
+                            "t3": t3,
+                            "highest_target": 0,
+                            "time": "Synced"
+                        }
+    except Exception as e:
+        logger.error(f"Telegram sync error: {e}")
+    return None
+
 # ==========================================
 # 4. HOLIDAYS & EXPIRY DETECTION
 # ==========================================
@@ -159,11 +214,12 @@ def load_backup_state():
         try:
             with open(DAILY_STATE_FILE, "r") as f:
                 data = json.load(f)
-                if data.get("date") == today_str:
+                if data.get("date") == today_str and data.get("active_trade"):
                     return data.get("active_trade")
         except Exception:
             pass
-    return None
+    # ഫയൽ ലഭ്യമല്ലെങ്കിൽ ടെലിഗ്രാമിൽ നിന്ന് പരിശോധിക്കുന്നു
+    return sync_active_trade_from_telegram()
 
 def save_daily_state(active_trade):
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
@@ -251,10 +307,13 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
 # 7. MAIN ENGINE (STRICT POSITION LOCK)
 # ==========================================
 def main():
-    logger.info("Starting SAS Level Pulse Engine (Strict T1/SL Wait Mode)...")
+    logger.info("Starting SAS Level Pulse Engine (Anti-Duplicate Cloud Safe)...")
 
-    # റീസ്റ്റാർട്ട് ആയാലും ആക്റ്റീവ് ട്രേഡ് നിലനിർത്തുന്നു
+    # റീസ്റ്റാർട്ട് ആയാലും ടെലിഗ്രാമിൽ നിന്നടക്കം പഴയ ട്രേഡ് പുനഃസ്ഥാപിക്കുന്നു
     active_trade = load_backup_state()
+    if active_trade:
+        logger.info(f"Active trade restored: {active_trade['side']} @ {active_trade['entry']}")
+
     startup_alert_sent = False
     last_heartbeat_hour = -1
     today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
@@ -268,7 +327,7 @@ def main():
         now = datetime.now(IST)
         current_time = now.time()
 
-        # 09:00 AM Engine Alert (റീസ്റ്റാർട്ടിൽ ഡ്യൂപ്ലിക്കേറ്റ് വരാതിരിക്കാൻ)
+        # 09:00 AM Engine Alert (റീസ്റ്റാർട്ട് ആയാൽ വീണ്ടും ഇടയ്ക്ക് അയക്കില്ല)
         if current_time >= dtime(9, 0) and not startup_alert_sent and current_time < dtime(9, 15):
             startup_msg = (
                 f"🚀 <b>{STRATEGY_DISPLAY_NAME} LIVE</b>\n"
@@ -285,7 +344,7 @@ def main():
 
             if current_price:
                 # ----------------------------------------------------
-                # SCENARIO A: നിലവിലുള്ള ട്രേഡ് മോണിറ്റർ ചെയ്യുക
+                # SCENARIO A: ആക്റ്റീവ് ട്രേഡ് ഉണ്ടെങ്കിൽ അത് മാത്രം മോണിറ്റർ ചെയ്യുക
                 # ----------------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
@@ -296,7 +355,7 @@ def main():
                     sl = active_trade["sl"]
 
                     if side == "BUY":
-                        # Hit Target 3 (പൂർണ്ണ എക്സിറ്റ്)
+                        # Hit Target 3
                         if current_price >= t3:
                             pnl = current_price - entry
                             active_trade["highest_target"] = 3
@@ -315,7 +374,7 @@ def main():
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Hit Target 1 (SL നേരെ Cost-ലേക്ക്)
+                        # Hit Target 1 (SL moved to Cost)
                         elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
@@ -340,7 +399,7 @@ def main():
                             save_daily_state(None)
 
                     elif side == "SELL":
-                        # Hit Target 3 (പൂർണ്ണ എക്സിറ്റ്)
+                        # Hit Target 3
                         if current_price <= t3:
                             pnl = entry - current_price
                             active_trade["highest_target"] = 3
@@ -359,7 +418,7 @@ def main():
                             send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Hit Target 1 (SL നേരെ Cost-ലേക്ക്)
+                        # Hit Target 1 (SL moved to Cost)
                         elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
