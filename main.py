@@ -49,7 +49,7 @@ telegram_session = requests.Session()
 executor = ThreadPoolExecutor(max_workers=4)
 
 # ==========================================
-# 2. ULTRA-FAST NSE LIVE FEED
+# 2. ULTRA-FAST NSE LIVE FEED (WITH HIGH & LOW)
 # ==========================================
 class FastNSELive:
     def __init__(self):
@@ -69,7 +69,7 @@ class FastNSELive:
         except Exception:
             pass
 
-    def get_nifty_price(self):
+    def get_nifty_data(self):
         if time.time() - self.last_cookie_time > 300:
             self.refresh_cookies()
         try:
@@ -79,12 +79,15 @@ class FastNSELive:
                 data = resp.json()
                 for item in data.get("data", []):
                     if item.get("index") == "NIFTY 50":
-                        return float(str(item.get("last")).replace(",", ""))
+                        last_price = float(str(item.get("last")).replace(",", ""))
+                        day_high = float(str(item.get("high", last_price)).replace(",", ""))
+                        day_low = float(str(item.get("low", last_price)).replace(",", ""))
+                        return last_price, day_high, day_low
             elif resp.status_code in [401, 403]:
                 self.refresh_cookies()
         except Exception:
             pass
-        return None
+        return None, None, None
 
 nse_live = FastNSELive()
 
@@ -341,7 +344,7 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc.build(elements)
 
 # ==========================================
-# 8. CORE ENGINE (30-PT TARGET/SL & STRICT LOCK)
+# 8. CORE ENGINE (REAL-TIME SPIKE DETECTION)
 # ==========================================
 def main():
     logger.info("Starting SAS Level Pulse Engine...")
@@ -375,7 +378,7 @@ def main():
 
         # Active Scanning Window (09:15 AM - 03:25 PM)
         if dtime(9, 15) <= current_time <= dtime(15, 25):
-            current_price = nse_live.get_nifty_price()
+            current_price, high_price, low_price = nse_live.get_nifty_data()
 
             if current_price:
                 # Fast Scalping: 1.5 Pt Sensitivity & 20s Update Window
@@ -405,6 +408,10 @@ def main():
                     t3 = active_trade["t3"]
                     sl = active_trade["sl"]
 
+                    # സ്പൈക്ക് മിസ്സാവാതിരിക്കാൻ ഹൈയും ലോയും പരിഗണിക്കുന്നു
+                    eval_high = max(current_price, high_price) if high_price else current_price
+                    eval_low = min(current_price, low_price) if low_price else current_price
+
                     # 1. Reverse Momentum Trigger Check
                     reversal_direction = None
                     if side == "BUY" and current_price < ref_low:
@@ -413,7 +420,6 @@ def main():
                         reversal_direction = "BUY"
 
                     if reversal_direction:
-                        # Step 1: Exit Previous Position
                         pnl = (current_price - entry) if side == "BUY" else (entry - current_price)
                         active_trade["status"] = f"Reversal Exit ({reversal_direction} Spike)"
                         active_trade["exit_price"] = current_price
@@ -429,7 +435,6 @@ def main():
                         send_telegram_alert(exit_msg)
                         time.sleep(1)
 
-                        # Step 2: Trigger New Reversal Signal with 30-Pt SL & Target
                         entry_time_display = now.strftime('%I:%M:%S %p')
                         fixed_risk = 30.0
 
@@ -476,80 +481,80 @@ def main():
 
                     # 2. Strict T1/T2/T3 & SL Monitoring
                     if side == "BUY":
-                        if current_price >= t3:
-                            pnl = current_price - entry
+                        if eval_high >= t3:
+                            pnl = t3 - entry
                             active_trade["highest_target"] = 3
                             active_trade["status"] = "Target 3 Achieved"
-                            active_trade["exit_price"] = current_price
+                            active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nPoints: +{pnl:.2f} Pts")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nPoints: +{pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
 
-                        elif current_price >= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif eval_high >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
-                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
+                        elif eval_high >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
-                        elif current_price <= sl:
-                            pnl = current_price - entry
-                            active_trade["exit_price"] = current_price
+                        elif eval_low <= sl:
+                            pnl = sl - entry
+                            active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
 
                             if active_trade.get("highest_target", 0) >= 1:
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nSpot: {current_price:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
+                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nSpot: {eval_low:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
                             else:
                                 active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {current_price:.2f}\nPoints: {pnl:.2f} Pts")
+                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {eval_low:.2f}\nPoints: {pnl:.2f} Pts")
 
                             record_trade_to_ledger(active_trade)
                             active_trade = None
                             save_daily_state(None)
 
                     elif side == "SELL":
-                        if current_price <= t3:
-                            pnl = entry - current_price
+                        if eval_low <= t3:
+                            pnl = entry - t3
                             active_trade["highest_target"] = 3
                             active_trade["status"] = "Target 3 Achieved"
-                            active_trade["exit_price"] = current_price
+                            active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nPoints: +{pnl:.2f} Pts")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nPoints: +{pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
 
-                        elif current_price <= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif eval_low <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
-                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
+                        elif eval_low <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {current_price:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
                             save_daily_state(active_trade)
 
-                        elif current_price >= sl:
-                            pnl = entry - current_price
-                            active_trade["exit_price"] = current_price
+                        elif eval_high >= sl:
+                            pnl = entry - sl
+                            active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
 
                             if active_trade.get("highest_target", 0) >= 1:
                                 active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nSpot: {current_price:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
+                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nSpot: {eval_high:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
                             else:
                                 active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {current_price:.2f}\nPoints: {pnl:.2f} Pts")
+                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {eval_high:.2f}\nPoints: {pnl:.2f} Pts")
 
                             record_trade_to_ledger(active_trade)
                             active_trade = None
