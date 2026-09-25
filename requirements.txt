@@ -1,6 +1,9 @@
+
+smartapi-python
+pyotp
 pandas
-numpy
 requests
+pytz
+reportlab
 nselib
 yfinance
-reportlab
