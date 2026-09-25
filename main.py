@@ -367,6 +367,7 @@ def main():
     ref_high = None
     ref_low = None
     last_eval_time = 0
+    last_heartbeat_hour = -1
 
     while True:
         now = datetime.now(IST)
@@ -382,6 +383,16 @@ def main():
                     ref_high = current_price + 1.5
                     ref_low = current_price - 1.5
                     last_eval_time = time.time()
+
+                # Hourly Status Alert (Admin Only)
+                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
+                    last_heartbeat_hour = now.hour
+                    hb_msg = (
+                        f"💓 <b>HOURLY STATUS ALERT (ADMIN)</b>\n"
+                        f"⏰ <b>Time:</b> {now.strftime('%I:%M:00 %p')} IST\n"
+                        f"📊 <b>NIFTY 50 Spot:</b> {current_price:.2f}"
+                    )
+                    send_admin_alert(hb_msg)
 
                 # ----------------------------------------------------
                 # SCENARIO A: ACTIVE TRADE MONITORING & AUTO-REVERSAL
