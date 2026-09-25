@@ -5,18 +5,12 @@ import time
 import pytz
 import logging
 import requests
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+import numpy as np
+import pandas as pd
+import yfinance as yf
 from datetime import datetime, timedelta, time as dtime
 from concurrent.futures import ThreadPoolExecutor
-
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
+from nselib import capital_market
 
 # ==========================================
 # 1. LOGGING & BASIC CONFIGURATION
@@ -30,214 +24,86 @@ logger = logging.getLogger("SAS_TRACKER")
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# Credentials & Bot Tokens
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004416495917")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@niftyfivtybanknifty")
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
 
-PUBLIC_ALERT_IDS = [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
+# Watchlist & Tickers (NIFTY 50 Only)
+INDEX_WATCHLIST = ["NIFTY 50"]
+YF_TICKERS = {"NIFTY 50": "^NSEI"}
 
-SENDER_EMAIL = "shinos99@gmail.com"
-SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
-RECEIVER_EMAILS = ["shinos99@gmail.com"]
-
-STRATEGY_DISPLAY_NAME = "SAS LEVEL PULSE"
+# State Files
 DAILY_STATE_FILE = "daily_active_trades.json"
-WEEKLY_LEDGER_FILE = "weekly_trades_ledger.json"
 EXPIRY_LEDGER_FILE = "expiry_trades_ledger.json"
 
 telegram_session = requests.Session()
 executor = ThreadPoolExecutor(max_workers=4)
 
 # ==========================================
-# 2. ACCURATE LIVE NSE LTP FEED
-# ==========================================
-class ReliableNSELive:
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.nseindia.com/"
-        }
-        self.last_cookie_time = 0
-        self.refresh_cookies()
-
-    def refresh_cookies(self):
-        try:
-            self.session.get("https://www.nseindia.com", headers=self.headers, timeout=5)
-            self.last_cookie_time = time.time()
-        except Exception:
-            pass
-
-    def get_nifty_price(self):
-        if time.time() - self.last_cookie_time > 180:
-            self.refresh_cookies()
-        try:
-            url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050"
-            resp = self.session.get(url, headers=self.headers, timeout=4)
-            if resp.status_code == 200:
-                data = resp.json()
-                for item in data.get("data", []):
-                    if item.get("symbol") == "NIFTY 50" or item.get("identifier") == "NIFTY 50":
-                        val = item.get("lastPrice")
-                        if val is not None:
-                            return float(str(val).replace(",", ""))
-            elif resp.status_code in [401, 403]:
-                self.refresh_cookies()
-        except Exception:
-            pass
-        return None
-
-nse_live = ReliableNSELive()
-
-# ==========================================
-# 3. FAST TELEGRAM DISPATCH
+# 2. FAST TELEGRAM DISPATCH (PARALLEL & NO TIMEOUT ERROR)
 # ==========================================
 def _send_single_telegram(cid, message, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
     try:
-        telegram_session.post(url, json=payload, timeout=5)
+        telegram_session.post(url, json=payload, timeout=10)
     except Exception as e:
         logger.error(f"[TELEGRAM ERROR] {cid}: {e}")
 
-def send_telegram_alert(message, parse_mode="HTML"):
+def send_telegram_alert(message, parse_mode="HTML", chat_id=None):
     if not TELEGRAM_BOT_TOKEN:
         return
-    for cid in PUBLIC_ALERT_IDS:
+    targets = [chat_id] if chat_id else [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
+    for cid in targets:
         if cid:
             executor.submit(_send_single_telegram, cid, message, parse_mode)
 
-def send_admin_alert(message, parse_mode="HTML"):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_ADMIN_CHAT_ID:
-        return
-    executor.submit(_send_single_telegram, TELEGRAM_ADMIN_CHAT_ID, message, parse_mode)
-
-def send_telegram_document(file_path, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    for chat_id in PUBLIC_ALERT_IDS:
-        try:
-            with open(file_path, 'rb') as doc:
-                telegram_session.post(url, data={'chat_id': chat_id, 'caption': caption}, files={'document': doc}, timeout=25)
-        except Exception as e:
-            logger.error(f"Telegram Doc Error ({chat_id}): {e}")
-
-def send_email_with_pdf(file_path, subject, body):
+# ==========================================
+# 3. NSE HOLIDAY & WEEKEND DETECTION
+# ==========================================
+def get_nse_holidays():
     try:
-        msg = MIMEMultipart()
-        msg['From'] = SENDER_EMAIL
-        msg['To'] = ", ".join(RECEIVER_EMAILS)
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-
-        with open(file_path, "rb") as attachment:
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(file_path)}")
-        msg.attach(part)
-
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
-        server.quit()
-        logger.info("PDF emailed successfully.")
+        holidays_df = capital_market.holiday_trading()
+        if holidays_df is not None and not holidays_df.empty and 'tradingDate' in holidays_df.columns:
+            return [datetime.strptime(d, '%d-%b-%Y').date() for d in holidays_df['tradingDate'].values]
     except Exception as e:
-        logger.error(f"Email Dispatch Warning: {e}")
+        logger.error(f"Error fetching NSE holidays: {e}")
+    return []
 
-# ==========================================
-# 4. STATE RESTORATION
-# ==========================================
-def sync_active_trade_from_telegram():
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        return None
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset=-10"
-        resp = requests.get(url, timeout=5).json()
-        if resp.get("ok") and resp.get("result"):
-            messages = resp.get("result")
-            has_closed = False
+holiday_dates = get_nse_holidays()
+today_dt = datetime.now(IST)
+today_date = today_dt.date()
+today_str_display = today_dt.strftime('%d-%b-%Y')
 
-            for item in reversed(messages):
-                msg = item.get("channel_post") or item.get("message")
-                if not msg or "text" not in msg:
-                    continue
-                text = msg["text"]
+# Weekend Check
+if today_dt.weekday() in [5, 6]:
+    day_name = "Saturday" if today_dt.weekday() == 5 else "Sunday"
+    send_telegram_alert(f"🏖️ <b>WEEKEND MARKET HOLIDAY ({day_name})</b>\n• Market is closed today.")
+    sys.exit(0)
 
-                if any(x in text for x in ["TARGET 1 HIT", "TARGET 2 HIT", "TARGET 3 HIT", "STOP LOSS HIT", "TRAILING STOP", "MARKET CLOSING"]):
-                    has_closed = True
-                    break
+# Holiday Check
+if today_date in holiday_dates:
+    send_telegram_alert(f"🏖️ <b>NSE MARKET HOLIDAY TODAY ({today_str_display})</b>\n• Market is closed.")
+    sys.exit(0)
 
-                if ("BUY SIGNAL" in text or "SELL SIGNAL" in text) and not has_closed:
-                    lines = text.split("\n")
-                    side = "BUY" if "BUY SIGNAL" in text else "SELL"
-                    entry, sl, t1, t2, t3 = 0, 0, 0, 0, 0
-                    for line in lines:
-                        if "Entry:" in line:
-                            entry = float(line.split(":")[-1].strip())
-                        elif "Stop Loss:" in line:
-                            sl = float(line.split(":")[-1].strip())
-                        elif "T1:" in line:
-                            t1 = float(line.split(":")[-1].strip())
-                        elif "T2:" in line:
-                            t2 = float(line.split(":")[-1].strip())
-                        elif "T3:" in line:
-                            t3 = float(line.split(":")[-1].strip())
-
-                    if entry > 0:
-                        return {
-                            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                            "index": "NIFTY 50",
-                            "side": side,
-                            "entry": entry,
-                            "sl": sl,
-                            "t1": t1,
-                            "t2": t2,
-                            "t3": t3,
-                            "highest_target": 0,
-                            "time": "Synced"
-                        }
-    except Exception as e:
-        logger.error(f"Telegram sync error: {e}")
-    return None
-
-# ==========================================
-# 5. EXPIRY & HOLIDAYS ENGINE
-# ==========================================
-NSE_HOLIDAYS_2026 = [
-    "2026-01-26", "2026-03-03", "2026-03-26", "2026-04-02", "2026-04-14",
-    "2026-05-01", "2026-05-28", "2026-06-26", "2026-08-15", "2026-10-02",
-    "2026-10-20", "2026-11-09", "2026-11-24", "2026-12-25"
-]
-
-def is_trading_holiday(dt):
-    return dt.weekday() in [5, 6] or dt.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026
-
-def get_actual_expiry_day(target_date):
-    curr = target_date
-    while is_trading_holiday(curr):
-        curr -= timedelta(days=1)
-    return curr
-
-def is_today_weekly_expiry():
-    today = datetime.now(IST).date()
-    days_until_tuesday = (1 - today.weekday()) % 7
-    target_tuesday = today + timedelta(days=days_until_tuesday)
-    return today == get_actual_expiry_day(target_tuesday)
-
-def is_today_monthly_expiry():
+# Monthly Tuesday Expiry Detection
+def is_today_monthly_tuesday_expiry():
     today = datetime.now(IST).date()
     next_month = today.replace(day=28) + timedelta(days=4)
     last_day_of_month = next_month - timedelta(days=next_month.day)
-    target_tuesday = last_day_of_month
-    while target_tuesday.weekday() != 1:
-        target_tuesday -= timedelta(days=1)
-    return today == get_actual_expiry_day(target_tuesday)
+    
+    cur_day = last_day_of_month
+    while cur_day.weekday() != 1:
+        cur_day -= timedelta(days=1)
+        
+    while cur_day in holiday_dates or cur_day.weekday() in [5, 6]:
+        cur_day -= timedelta(days=1)
+        
+    return today == cur_day
 
 # ==========================================
-# 6. LEDGER MANAGEMENT
+# 4. STATE & LEDGER MANAGEMENT
 # ==========================================
 def load_backup_state():
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
@@ -245,159 +111,156 @@ def load_backup_state():
         try:
             with open(DAILY_STATE_FILE, "r") as f:
                 data = json.load(f)
-                if data.get("date") == today_str and data.get("active_trade"):
+                if data.get("date") == today_str:
+                    logger.info("Daily state restored successfully.")
                     return data.get("active_trade")
-        except Exception:
-            pass
-    return sync_active_trade_from_telegram()
+        except Exception as e:
+            logger.error(f"Error loading daily state: {e}")
+    return None
 
 def save_daily_state(active_trade):
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    data = {"date": today_str, "active_trade": active_trade}
     try:
         with open(DAILY_STATE_FILE, "w") as f:
-            json.dump({"date": today_str, "active_trade": active_trade}, f, indent=4)
-    except Exception:
-        pass
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving daily state: {e}")
 
-def append_to_file(filepath, record):
-    ledger = []
-    if os.path.exists(filepath):
+def load_expiry_ledger():
+    if os.path.exists(EXPIRY_LEDGER_FILE):
         try:
-            with open(filepath, "r") as f:
-                ledger = json.load(f)
-        except Exception:
-            ledger = []
-    ledger.append(record)
-    try:
-        with open(filepath, "w") as f:
-            json.dump(ledger, f, indent=4)
-    except Exception:
-        pass
-
-def record_trade_to_ledger(trade_record):
-    append_to_file(WEEKLY_LEDGER_FILE, trade_record)
-    append_to_file(EXPIRY_LEDGER_FILE, trade_record)
-
-def load_ledger(filepath):
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
+            with open(EXPIRY_LEDGER_FILE, "r") as f:
                 return json.load(f)
         except Exception:
             return []
     return []
 
-def clear_ledger(filepath):
+def record_trade_to_ledger(trade_record):
+    ledger = load_expiry_ledger()
+    ledger.append(trade_record)
     try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        with open(EXPIRY_LEDGER_FILE, "w") as f:
+            json.dump(ledger, f, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving ledger: {e}")
+
+def clear_expiry_ledger():
+    try:
+        if os.path.exists(EXPIRY_LEDGER_FILE):
+            os.remove(EXPIRY_LEDGER_FILE)
     except Exception:
         pass
 
 # ==========================================
-# 7. PDF GENERATOR
+# 5. CAMARILLA MARKET DATA & 30 PT RISK
 # ==========================================
-def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
-    doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
-    styles = getSampleStyleSheet()
-    elements = []
+def fetch_previous_ohlc():
+    try:
+        ticker = yf.Ticker(YF_TICKERS["NIFTY 50"])
+        df = ticker.history(period="5d", interval="1d")
+        if len(df) >= 2:
+            prev_day = df.iloc[-2]
+            return float(prev_day['High']), float(prev_day['Low']), float(prev_day['Close'])
+    except Exception as e:
+        logger.error(f"Error fetching OHLC: {e}")
+    return None, None, None
 
-    title_style = ParagraphStyle('RepTitle', parent=styles['Heading1'], fontSize=14, leading=17, textColor=colors.HexColor("#1A365D"), alignment=1)
-    elements.append(Paragraph(f"{STRATEGY_DISPLAY_NAME} - {title_text}", title_style))
-    pnl_status_text = f"NET POINTS: +{total_pnl:.2f} Pts" if total_pnl >= 0 else f"NET POINTS: {total_pnl:.2f} Pts"
-    elements.append(Paragraph(f"Strategy: {STRATEGY_DISPLAY_NAME} | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
-    elements.append(Spacer(1, 10))
+def calculate_levels(high, low, close):
+    diff = high - low
+    levels = {
+        "H5": close + (1.1 * diff),
+        "H4": close + (diff * 1.1 / 2.0),
+        "H3": close + (diff * 1.1 / 4.0),
+        "L3": close - (diff * 1.1 / 4.0),
+        "L4": close - (diff * 1.1 / 2.0),
+        "L5": close - (1.1 * diff),
+        "Dynamic_Risk": 30.0  # ഫിക്സഡ് 30 പോയിന്റ് SL & Quick Targets (50/50)
+    }
+    return levels
 
-    headers = ["SL", "Date", "Side", "Entry & Time", "Exit Price", "Target 1", "Target 2", "Target 3", "Points", "Status"]
-    table_rows = [headers]
-
-    for i, l in enumerate(logs, 1):
-        table_rows.append([
-            str(i), l.get('date', '-'), f"{l.get('index', 'NIFTY 50')}\n({l.get('side', '-')})",
-            f"{l.get('entry', 0.0):.2f}\n({l.get('time', '-')})",
-            f"{l.get('exit_price', 0.0):.2f}",
-            f"{l.get('t1', 0.0):.2f}" if l.get('highest_target', 0) >= 1 else "-",
-            f"{l.get('t2', 0.0):.2f}" if l.get('highest_target', 0) >= 2 else "-",
-            f"{l.get('t3', 0.0):.2f}" if l.get('highest_target', 0) >= 3 else "-",
-            f"{l.get('pnl', 0.0):+.2f}",
-            l.get('status', '-')
-        ])
-
-    table_rows.append([
-        "TOTAL", "-", "-", "-", "-", "-", "-", "NET POINTS", f"{total_pnl:+.2f}", "FINISHED"
-    ])
-
-    trade_table = Table(table_rows, colWidths=[25, 65, 80, 85, 75, 75, 75, 75, 65, 120])
-    trade_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2B6CB0")),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-        ('FONTSIZE', (0, 0), (-1, -1), 7.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#EDF2F7")),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-    ]))
-    elements.append(trade_table)
-    doc.build(elements)
+def get_live_tick():
+    try:
+        data = yf.download(tickers=YF_TICKERS["NIFTY 50"], period="1d", interval="1m", progress=False)
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            return float(data['Close'].iloc[-1])
+    except Exception as e:
+        logger.error(f"Error fetching live tick: {e}")
+    return None
 
 # ==========================================
-# 8. CORE ENGINE (30 PT FIXED SL & QUICK TARGETS)
+# 6. CORE EXECUTION BOT
 # ==========================================
 def main():
-    logger.info("Starting SAS Level Pulse Engine (30 Pt Fixed Risk Model)...")
+    logger.info("Initializing SAS Level Pulse Bot...")
 
+    high, low, close = fetch_previous_ohlc()
+    if not high:
+        logger.error("Failed to obtain previous session OHLC.")
+        return
+
+    levels = calculate_levels(high, low, close)
+    dynamic_risk = levels["Dynamic_Risk"]
+    logger.info(f"NIFTY Camarilla Levels Loaded: R4={levels['H4']:.2f}, R3={levels['H3']:.2f}, S3={levels['L3']:.2f}, S4={levels['L4']:.2f}, Risk={dynamic_risk} Pts")
+
+    startup_alert_sent = False
+    levels_posted = False
     active_trade = load_backup_state()
-    today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
-    today_str_display = datetime.now(IST).strftime('%d-%b-%Y')
-
-    if active_trade:
-        send_admin_alert(
-            f"♻️ <b>BOT RESTARTED (STATE RESTORED)</b>\n"
-            f"• Position: {active_trade['side']} @ {active_trade['entry']:.2f}\n"
-            f"• Stop Loss: {active_trade['sl']:.2f} | T1: {active_trade['t1']:.2f}\n"
-            f"• Status: Strict Lock Active. No new signals until T1 or SL."
-        )
-    else:
-        send_admin_alert(
-            f"🚀 <b>{STRATEGY_DISPLAY_NAME} RUNNING</b>\n"
-            f"• Status: Engine active for admin.\n"
-            f"• Joiners will only receive Signals & Reports."
-        )
-
-    ref_high = None
-    ref_low = None
-    last_eval_time = 0
+    prev_tick = None
     last_heartbeat_hour = -1
+    today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+    sl_cooldown_until = None
+    last_sl_side = None
 
     while True:
         now = datetime.now(IST)
         current_time = now.time()
 
+        # 09:00 AM Engine Alert
+        if current_time >= dtime(9, 0) and not startup_alert_sent:
+            startup_msg = (
+                f"🚀 <b>SAS LEVEL PULSE LIVE (09:00 AM)</b>\n\n"
+                f"⚡ <b>Strategy:</b> SAS LEVEL PULSE (Camarilla Momentum)\n"
+                f"📊 <b>Index:</b> NIFTY 50\n"
+                f"🕒 <b>Time:</b> {now.strftime('%I:%M:%S %p')} IST\n"
+                f"🛡️ <b>Engine Status:</b> Fast Real-Time Scanner Active."
+            )
+            send_telegram_alert(startup_msg)
+            startup_alert_sent = True
+
+        # 09:05 AM - Camarilla Levels Alert
+        if current_time >= dtime(9, 5) and not levels_posted:
+            msg = (
+                f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>Index:</b> NIFTY 50\n"
+                f"🔹 <b>Bullish Breakout (R4):</b> {levels['H4']:.2f}\n"
+                f"🔹 <b>Resistance Reversal (R3):</b> {levels['H3']:.2f}\n"
+                f"🔸 <b>Support Reversal (S3):</b> {levels['L3']:.2f}\n"
+                f"🔸 <b>Bearish Breakdown (S4):</b> {levels['L4']:.2f}\n"
+                f"🛡️ <b>Day Fixed Risk:</b> 30.0 Pts\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Tracking live tick-by-tick momentum.</i>\n"
+                f"⚠️ <i>Strictly for educational study only. Not SEBI registered.</i>"
+            )
+            send_telegram_alert(msg)
+            levels_posted = True
+
+        # Active Scanning Window (09:15 AM - 03:25 PM)
         if dtime(9, 15) <= current_time <= dtime(15, 25):
-            current_price = nse_live.get_nifty_price()
+            current_tick = get_live_tick()
+            if current_tick:
+                if prev_tick is None:
+                    prev_tick = current_tick
+                    time.sleep(1)
+                    continue
 
-            if current_price and current_price > 0:
-                if active_trade is None:
-                    if ref_high is None or (time.time() - last_eval_time > 20):
-                        ref_high = current_price + 1.5
-                        ref_low = current_price - 1.5
-                        last_eval_time = time.time()
-
-                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
-                    last_heartbeat_hour = now.hour
-                    hb_msg = (
-                        f"💓 <b>HOURLY STATUS ALERT (ADMIN)</b>\n"
-                        f"⏰ <b>Time:</b> {now.strftime('%I:%M:00 %p')} IST\n"
-                        f"📊 <b>NIFTY 50 Spot:</b> {current_price:.2f}"
-                    )
-                    send_admin_alert(hb_msg)
-
-                # ----------------------------------------------------
-                # SCENARIO A: ACTIVE TRADE MONITORING (LTP BASED)
-                # ----------------------------------------------------
+                # -----------------------------------------------
+                # SCENARIO A: MONITOR ACTIVE TRADE
+                # -----------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
                     entry = active_trade["entry"]
@@ -408,151 +271,187 @@ def main():
 
                     if side == "BUY":
                         # Target 3 (Full Profit)
-                        if current_price >= t3:
+                        if current_tick >= t3:
                             pnl = t3 - entry
                             active_trade["highest_target"] = 3
                             active_trade["status"] = "Target 3 Achieved"
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [BUY]</b>\nSpot: {t3:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
                         # Target 2
-                        elif current_price >= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif current_tick >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
-                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [BUY]</b>\nSpot: {t2:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +60.0 Pts\nSL trailed to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Target 1 (Quick 30 Pt Scalp -> Lock Profit & Ready for Next)
-                        elif current_price >= t1 and active_trade.get("highest_target", 0) < 1:
+                        # Target 1 (Quick 30 Pts -> Booked & Ready for Next)
+                        elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["status"] = "Target 1 Achieved"
                             active_trade["exit_price"] = t1
                             active_trade["pnl"] = t1 - entry
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {t1:.2f}\nPoints: +{t1 - entry:.2f} Pts\nTarget 1 booked. Ready for next opportunities.")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{t1 - entry:.2f} Pts\nTarget 1 booked safely. Ready for next signal.")
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
                         # Stop Loss Hit
-                        elif current_price <= sl:
+                        elif current_tick <= sl:
                             pnl = sl - entry
                             active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
                             active_trade["status"] = "Stop Loss Hit"
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {sl:.2f}\nPoints: {pnl:.2f} Pts")
+                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                            sl_cooldown_until = now + timedelta(minutes=3)
+                            last_sl_side = "BUY"
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
                     elif side == "SELL":
                         # Target 3 (Full Profit)
-                        if current_price <= t3:
+                        if current_tick <= t3:
                             pnl = entry - t3
                             active_trade["highest_target"] = 3
                             active_trade["status"] = "Target 3 Achieved"
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [SELL]</b>\nSpot: {t3:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
                         # Target 2
-                        elif current_price <= t2 and active_trade.get("highest_target", 0) < 2:
+                        elif current_tick <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
                             active_trade["sl"] = t1
-                            send_telegram_alert(f"🎯 <b>TARGET 2 HIT! [SELL]</b>\nSpot: {t2:.2f}\nTrailing SL moved to Target 1 ({t1:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +60.0 Pts\nSL trailed to Target 1 ({t1:.2f}).")
                             save_daily_state(active_trade)
 
-                        # Target 1 (Quick 30 Pt Scalp -> Lock Profit & Ready for Next)
-                        elif current_price <= t1 and active_trade.get("highest_target", 0) < 1:
+                        # Target 1 (Quick 30 Pts -> Booked & Ready for Next)
+                        elif current_tick <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["status"] = "Target 1 Achieved"
                             active_trade["exit_price"] = t1
                             active_trade["pnl"] = entry - t1
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {t1:.2f}\nPoints: +{entry - t1:.2f} Pts\nTarget 1 booked. Ready for next opportunities.")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{entry - t1:.2f} Pts\nTarget 1 booked safely. Ready for next signal.")
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
                         # Stop Loss Hit
-                        elif current_price >= sl:
+                        elif current_tick >= sl:
                             pnl = entry - sl
                             active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
                             active_trade["status"] = "Stop Loss Hit"
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {sl:.2f}\nPoints: {pnl:.2f} Pts")
+                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
+                            sl_cooldown_until = now + timedelta(minutes=3)
+                            last_sl_side = "SELL"
                             active_trade = None
                             save_daily_state(None)
-                            ref_high = None
 
-                # ----------------------------------------------------
-                # SCENARIO B: SCAN FOR NEW TRADES (30 PT FIXED MODEL)
-                # ----------------------------------------------------
+                # -----------------------------------------------
+                # SCENARIO B: SCAN FOR CAMARILLA BREAKOUT & REVERSAL SIGNALS
+                # -----------------------------------------------
                 else:
-                    if ref_high is not None and ref_low is not None:
+                    trigger = None
+                    trade_type = ""
+                    risk_pts = dynamic_risk  # കൃത്യം 30 Pts
+
+                    # 1. Bullish Breakout (Above R4)
+                    if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
+                        trigger = "BUY"
+                        trade_type = "Breakout Spike (Above R4)"
+
+                    # 2. Bullish Reversal (Bounce from S3)
+                    elif prev_tick <= levels["L3"] and current_tick > levels["L3"]:
+                        trigger = "BUY"
+                        trade_type = "Support Bounce (Reversal from S3)"
+
+                    # 3. Bearish Breakdown (Below S4)
+                    elif prev_tick > levels["L4"] and current_tick <= levels["L4"]:
+                        trigger = "SELL"
+                        trade_type = "Breakdown Spike (Below S4)"
+
+                    # 4. Bearish Reversal (Rejection from R3)
+                    elif prev_tick >= levels["H3"] and current_tick < levels["H3"]:
+                        trigger = "SELL"
+                        trade_type = "Resistance Rejection (Reversal from R3)"
+
+                    # SL Cooldown check
+                    if trigger and sl_cooldown_until and now < sl_cooldown_until and trigger == last_sl_side:
                         trigger = None
-                        if current_price > ref_high:
-                            trigger = "BUY"
-                        elif current_price < ref_low:
-                            trigger = "SELL"
 
-                        if trigger:
-                            entry = current_price
-                            entry_time_display = now.strftime('%I:%M:%S %p')
-                            fixed_risk = 30.0  # കൃത്യം 30 പോയിന്റ് ഫിക്സഡ് SL & Quick Targets
+                    # പുതിയ സിഗ്നൽ നൽകൽ (30 Pt SL & 30 Pt T1)
+                    if trigger:
+                        entry = current_tick
+                        if trigger == "BUY":
+                            sl = round(entry - risk_pts, 2)         # -30 Pts
+                            t1 = round(entry + risk_pts, 2)         # +30 Pts
+                            t2 = round(entry + (risk_pts * 2.0), 2) # +60 Pts
+                            t3 = round(entry + (risk_pts * 3.0), 2) # +90 Pts
+                        else:
+                            sl = round(entry + risk_pts, 2)         # +30 Pts
+                            t1 = round(entry - risk_pts, 2)         # -30 Pts
+                            t2 = round(entry - (risk_pts * 2.0), 2) # -60 Pts
+                            t3 = round(entry - (risk_pts * 3.0), 2) # -90 Pts
 
-                            if trigger == "BUY":
-                                sl = round(entry - fixed_risk, 2)
-                                t1 = round(entry + fixed_risk, 2)       # +30 Pts (Quick Target 1)
-                                t2 = round(entry + (fixed_risk * 2), 2) # +60 Pts
-                                t3 = round(entry + (fixed_risk * 3), 2) # +90 Pts
-                            else:
-                                sl = round(entry + fixed_risk, 2)
-                                t1 = round(entry - fixed_risk, 2)       # +30 Pts (Quick Target 1)
-                                t2 = round(entry - (fixed_risk * 2), 2) # +60 Pts
-                                t3 = round(entry - (fixed_risk * 3), 2) # +90 Pts
+                        active_trade = {
+                            "date": today_date_str,
+                            "index": "NIFTY 50",
+                            "side": trigger,
+                            "type": trade_type,
+                            "entry": entry,
+                            "sl": sl,
+                            "initial_sl": sl,
+                            "t1": t1,
+                            "t2": t2,
+                            "t3": t3,
+                            "highest_target": 0,
+                            "time": now.strftime("%H:%M:%S")
+                        }
+                        save_daily_state(active_trade)
 
-                            active_trade = {
-                                "date": today_date_str,
-                                "index": "NIFTY 50",
-                                "side": trigger,
-                                "entry": entry,
-                                "sl": sl,
-                                "t1": t1,
-                                "t2": t2,
-                                "t3": t3,
-                                "highest_target": 0,
-                                "time": entry_time_display
-                            }
-                            save_daily_state(active_trade)
+                        msg = (
+                            f"⚡ <b>SAS LEVEL PULSE SIGNAL</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 <b>Index:</b> NIFTY 50\n"
+                            f"🎯 <b>Action:</b> {trigger}\n"
+                            f"💡 <b>Pattern:</b> {trade_type}\n"
+                            f"🔹 <b>Entry:</b> {entry:.2f}\n"
+                            f"🛑 <b>Stop Loss:</b> {sl:.2f} (30.0 Pts)\n"
+                            f"🎯 <b>Target 1:</b> {t1:.2f} (30.0 Pts)\n"
+                            f"🎯 <b>Target 2:</b> {t2:.2f} (60.0 Pts)\n"
+                            f"🎯 <b>Target 3:</b> {t3:.2f} (90.0 Pts)\n"
+                            f"━━━━━━━━━━━━━━━━━━━━"
+                        )
+                        send_telegram_alert(msg)
 
-                            msg = (
-                                f"⚡ <b>{trigger} SIGNAL</b>\n\n"
-                                f"• <b>Entry:</b> {entry:.2f}\n"
-                                f"• <b>Entry Time:</b> {entry_time_display} IST\n"
-                                f"• <b>Spot:</b> {current_price:.2f}\n"
-                                f"• <b>Stop Loss:</b> {sl:.2f} (30.0 Pts)\n"
-                                f"• <b>T1:</b> {t1:.2f} (+30.0 Pts)\n"
-                                f"• <b>T2:</b> {t2:.2f} (+60.0 Pts)\n"
-                                f"• <b>T3:</b> {t3:.2f} (+90.0 Pts)"
-                            )
-                            send_telegram_alert(msg)
+                # Hourly heartbeat alert
+                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
+                    last_heartbeat_hour = now.hour
+                    diff = current_tick - close
+                    pct = (diff / close) * 100 if close != 0 else 0.0
+                    hb_msg = (
+                        f"💓 <b>HOURLY STATUS ALERT</b>\n"
+                        f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n\n"
+                        f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
+                    )
+                    send_telegram_alert(hb_msg)
 
-        # 03:25 PM Auto Square Off
+                prev_tick = current_tick
+
+        # Auto Square Off at 03:25 PM
         if current_time >= dtime(15, 25) and active_trade is not None:
             entry = active_trade["entry"]
-            last_prc = current_price if 'current_price' in locals() and current_price else entry
+            last_prc = current_tick if current_tick else entry
             pnl = (last_prc - entry) if active_trade["side"] == "BUY" else (entry - last_prc)
             active_trade["status"] = "EOD Auto-Exit"
             active_trade["exit_price"] = last_prc
@@ -562,80 +461,44 @@ def main():
             save_daily_state(None)
             send_telegram_alert(f"🔔 <b>MARKET CLOSING (03:25 PM):</b> Open position closed ({pnl:+.2f} Pts).")
 
-        # 03:40 PM Reports Dispatch
+        # 03:40 PM - Daily Summary & Monthly Tuesday Expiry Report
         if current_time >= dtime(15, 40):
-            weekly_ledger = load_ledger(WEEKLY_LEDGER_FILE)
-            today_trades = [t for t in weekly_ledger if t.get("date") == today_date_str]
+            ledger = load_expiry_ledger()
+            today_trades = [t for t in ledger if t.get("date") == today_date_str]
             today_pnl = sum(t.get("pnl", 0.0) for t in today_trades)
-
+            
+            # 1. Daily Report
             daily_summary = (
                 f"📊 <b>DAILY PERFORMANCE SUMMARY (03:40 PM)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 Date: {today_str_display}\n"
-                f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
+                f"📅 <b>Date:</b> {today_str_display}\n"
+                f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
                 f"• Today Trades: {len(today_trades)}\n"
-                f"📈 Day Net Points: {today_pnl:+.2f} Pts\n"
+                f"📈 <b>Day Net Points:</b> {today_pnl:+.2f} Pts\n"
                 f"━━━━━━━━━━━━━━━━━━━━"
             )
             send_telegram_alert(daily_summary)
 
-            daily_pdf = f"Daily_Report_{today_str_display}.pdf"
-            try:
-                generate_pdf_report(daily_pdf, "DAILY PERFORMANCE REPORT", today_str_display, today_trades, today_pnl)
-                send_telegram_document(daily_pdf, caption=f"📄 Daily Report ({today_str_display}) | Net: {today_pnl:+.2f} Pts")
-                send_email_with_pdf(daily_pdf, f"Daily Report - {today_str_display}", daily_summary)
-            except Exception as e:
-                logger.error(f"Daily PDF Error: {e}")
-
-            if is_today_weekly_expiry():
-                total_weekly_pnl = sum(t.get("pnl", 0.0) for t in weekly_ledger)
-                weekly_summary = (
-                    f"🎯 <b>WEEKLY EXPIRY SUMMARY (03:40 PM)</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📅 Expiry Date: {today_str_display}\n"
-                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                    f"• Weekly Trades: {len(weekly_ledger)}\n"
-                    f"📈 Weekly Net Points: {total_weekly_pnl:+.2f} Pts\n"
-                    f"━━━━━━━━━━━━━━━━━━━━"
-                )
-                send_telegram_alert(weekly_summary)
-
-                weekly_pdf = f"Weekly_Expiry_Report_{today_str_display}.pdf"
-                try:
-                    generate_pdf_report(weekly_pdf, "WEEKLY EXPIRY REPORT", today_str_display, weekly_ledger, total_weekly_pnl)
-                    send_telegram_document(weekly_pdf, caption=f"📄 Weekly Expiry Report | Net: {total_weekly_pnl:+.2f} Pts")
-                    send_email_with_pdf(weekly_pdf, f"Weekly Expiry Report - {today_str_display}", weekly_summary)
-                    clear_ledger(WEEKLY_LEDGER_FILE)
-                except Exception as e:
-                    logger.error(f"Weekly PDF Error: {e}")
-
-            if is_today_monthly_expiry():
-                monthly_ledger = load_ledger(EXPIRY_LEDGER_FILE)
-                total_monthly_pnl = sum(t.get("pnl", 0.0) for t in monthly_ledger)
+            # 2. Monthly Tuesday Expiry Report
+            if is_today_monthly_tuesday_expiry():
+                total_cycle_pnl = sum(t.get("pnl", 0.0) for t in ledger)
                 monthly_summary = (
                     f"🏆 <b>MONTHLY EXPIRY CYCLE REPORT (03:40 PM)</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📅 Expiry Date: {today_str_display}\n"
-                    f"⚡ Strategy: {STRATEGY_DISPLAY_NAME}\n"
-                    f"• Total Month Trades: {len(monthly_ledger)}\n"
-                    f"📈 Month Net Points: {total_monthly_pnl:+.2f} Pts\n"
-                    f"━━━━━━━━━━━━━━━━━━━━"
+                    f"📅 <b>Expiry Date:</b> {today_str_display}\n"
+                    f"⚡ <b>Strategy:</b> SAS LEVEL PULSE\n"
+                    f"• Total Month Crossovers: {len(ledger)}\n"
+                    f"📈 <b>Net Cycle Points:</b> {total_cycle_pnl:+.2f} Pts\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<i>Monthly cycle completed. Ledger reset for next cycle.</i>"
                 )
                 send_telegram_alert(monthly_summary)
+                clear_expiry_ledger()
 
-                monthly_pdf = f"Monthly_Expiry_Report_{today_str_display}.pdf"
-                try:
-                    generate_pdf_report(monthly_pdf, "MONTHLY EXPIRY CYCLE REPORT", today_str_display, monthly_ledger, total_monthly_pnl)
-                    send_telegram_document(monthly_pdf, caption=f"📄 Monthly Expiry Report | Net: {total_monthly_pnl:+.2f} Pts")
-                    send_email_with_pdf(monthly_pdf, f"Monthly Expiry Report - {today_str_display}", monthly_summary)
-                    clear_ledger(EXPIRY_LEDGER_FILE)
-                except Exception as e:
-                    logger.error(f"Monthly PDF Error: {e}")
-
-            send_admin_alert("🛑 <b>MARKET CLOSED:</b> Engine stopped successfully.")
+            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Pulse shutting down safely.")
             break
 
-        time.sleep(0.5)
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
