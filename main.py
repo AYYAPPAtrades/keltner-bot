@@ -166,7 +166,7 @@ def sync_active_trade_from_telegram():
                     continue
                 text = msg["text"]
 
-                if any(x in text for x in ["TARGET 1 HIT", "STOP LOSS HIT", "TRAILING STOP", "MARKET CLOSING", "EXIT PREVIOUS POSITION"]):
+                if any(x in text for x in ["TARGET 1 HIT", "STOP LOSS HIT", "TRAILING STOP", "MARKET CLOSING"]):
                     has_closed = True
                     break
 
@@ -344,7 +344,7 @@ def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
     doc.build(elements)
 
 # ==========================================
-# 8. CORE ENGINE (REAL-TIME SPIKE DETECTION)
+# 8. CORE ENGINE (NO REVERSAL - STRICT LOCK)
 # ==========================================
 def main():
     logger.info("Starting SAS Level Pulse Engine...")
@@ -358,7 +358,7 @@ def main():
             f"♻️ <b>BOT RESTARTED (STATE RESTORED)</b>\n"
             f"• Position: {active_trade['side']} @ {active_trade['entry']:.2f}\n"
             f"• Stop Loss: {active_trade['sl']:.2f} | T1: {active_trade['t1']:.2f}\n"
-            f"• Status: Strict Lock Active. No duplicate signals."
+            f"• Status: Strict Lock Active. No new signals until T1 or SL."
         )
     else:
         send_admin_alert(
@@ -381,11 +381,12 @@ def main():
             current_price, high_price, low_price = nse_live.get_nifty_data()
 
             if current_price:
-                # Fast Scalping: 1.5 Pt Sensitivity & 20s Update Window
-                if ref_high is None or (time.time() - last_eval_time > 20):
-                    ref_high = current_price + 1.5
-                    ref_low = current_price - 1.5
-                    last_eval_time = time.time()
+                # 1.5 Pt Breakout Sensitivity & 20s Window for New Entry
+                if active_trade is None:
+                    if ref_high is None or (time.time() - last_eval_time > 20):
+                        ref_high = current_price + 1.5
+                        ref_low = current_price - 1.5
+                        last_eval_time = time.time()
 
                 # Hourly Status Alert (Admin Only)
                 if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
@@ -398,7 +399,7 @@ def main():
                     send_admin_alert(hb_msg)
 
                 # ----------------------------------------------------
-                # SCENARIO A: ACTIVE TRADE MONITORING & AUTO-REVERSAL
+                # SCENARIO A: ACTIVE TRADE MONITORING (STRICT T1 / SL)
                 # ----------------------------------------------------
                 if active_trade is not None:
                     side = active_trade["side"]
@@ -408,78 +409,9 @@ def main():
                     t3 = active_trade["t3"]
                     sl = active_trade["sl"]
 
-                    # സ്പൈക്ക് മിസ്സാവാതിരിക്കാൻ ഹൈയും ലോയും പരിഗണിക്കുന്നു
                     eval_high = max(current_price, high_price) if high_price else current_price
                     eval_low = min(current_price, low_price) if low_price else current_price
 
-                    # 1. Reverse Momentum Trigger Check
-                    reversal_direction = None
-                    if side == "BUY" and current_price < ref_low:
-                        reversal_direction = "SELL"
-                    elif side == "SELL" and current_price > ref_high:
-                        reversal_direction = "BUY"
-
-                    if reversal_direction:
-                        pnl = (current_price - entry) if side == "BUY" else (entry - current_price)
-                        active_trade["status"] = f"Reversal Exit ({reversal_direction} Spike)"
-                        active_trade["exit_price"] = current_price
-                        active_trade["pnl"] = pnl
-                        record_trade_to_ledger(active_trade)
-
-                        exit_msg = (
-                            f"⚠️ <b>EXIT PREVIOUS POSITION [{side}]</b>\n\n"
-                            f"• <b>Exit Price:</b> {current_price:.2f}\n"
-                            f"• <b>Points:</b> {pnl:+.2f} Pts\n"
-                            f"• <b>Reason:</b> Reversal detected. Preparing new signal..."
-                        )
-                        send_telegram_alert(exit_msg)
-                        time.sleep(1)
-
-                        entry_time_display = now.strftime('%I:%M:%S %p')
-                        fixed_risk = 30.0
-
-                        if reversal_direction == "BUY":
-                            new_sl = round(current_price - fixed_risk, 2)
-                            new_t1 = round(current_price + fixed_risk, 2)
-                            new_t2 = round(current_price + (fixed_risk * 2.0), 2)
-                            new_t3 = round(current_price + (fixed_risk * 3.0), 2)
-                        else:
-                            new_sl = round(current_price + fixed_risk, 2)
-                            new_t1 = round(current_price - fixed_risk, 2)
-                            new_t2 = round(current_price - (fixed_risk * 2.0), 2)
-                            new_t3 = round(current_price - (fixed_risk * 3.0), 2)
-
-                        active_trade = {
-                            "date": today_date_str,
-                            "index": "NIFTY 50",
-                            "side": reversal_direction,
-                            "entry": current_price,
-                            "sl": new_sl,
-                            "t1": new_t1,
-                            "t2": new_t2,
-                            "t3": new_t3,
-                            "highest_target": 0,
-                            "time": entry_time_display
-                        }
-                        save_daily_state(active_trade)
-
-                        rev_signal_msg = (
-                            f"⚡ <b>{reversal_direction} SIGNAL (REVERSAL)</b>\n\n"
-                            f"• <b>Entry:</b> {current_price:.2f}\n"
-                            f"• <b>Entry Time:</b> {entry_time_display} IST\n"
-                            f"• <b>Spot:</b> {current_price:.2f}\n"
-                            f"• <b>Stop Loss:</b> {new_sl:.2f}\n"
-                            f"• <b>T1:</b> {new_t1:.2f}\n"
-                            f"• <b>T2:</b> {new_t2:.2f}\n"
-                            f"• <b>T3:</b> {new_t3:.2f}"
-                        )
-                        send_telegram_alert(rev_signal_msg)
-                        ref_high = current_price + 1.5
-                        ref_low = current_price - 1.5
-                        last_eval_time = time.time()
-                        continue
-
-                    # 2. Strict T1/T2/T3 & SL Monitoring
                     if side == "BUY":
                         if eval_high >= t3:
                             pnl = t3 - entry
@@ -488,9 +420,10 @@ def main():
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nPoints: +{pnl:.2f} Pts")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
                             active_trade = None
                             save_daily_state(None)
+                            ref_high = None
 
                         elif eval_high >= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
@@ -501,24 +434,27 @@ def main():
                         elif eval_high >= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [BUY]</b>\nSpot: {eval_high:.2f}\nTrailing SL moved to Cost ({entry:.2f}). Ready for next signals.")
                             save_daily_state(active_trade)
+                            # T1 അടിച്ചതിനാൽ trade completed ആയി കണക്കാക്കി പുതിയ സിഗ്നലിനായി സ്കാനിംഗ് അനുവദിക്കുന്നു
+                            active_trade["status"] = "Target 1 Achieved"
+                            active_trade["exit_price"] = t1
+                            active_trade["pnl"] = t1 - entry
+                            record_trade_to_ledger(active_trade)
+                            active_trade = None
+                            save_daily_state(None)
+                            ref_high = None
 
                         elif eval_low <= sl:
                             pnl = sl - entry
                             active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
-
-                            if active_trade.get("highest_target", 0) >= 1:
-                                active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nSpot: {eval_low:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
-                            else:
-                                active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {eval_low:.2f}\nPoints: {pnl:.2f} Pts")
-
+                            active_trade["status"] = "Stop Loss Hit"
                             record_trade_to_ledger(active_trade)
+                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nSpot: {eval_low:.2f}\nPoints: {pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
+                            ref_high = None
 
                     elif side == "SELL":
                         if eval_low <= t3:
@@ -528,9 +464,10 @@ def main():
                             active_trade["exit_price"] = t3
                             active_trade["pnl"] = pnl
                             record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nPoints: +{pnl:.2f} Pts")
+                            send_telegram_alert(f"🎯 <b>TARGET 3 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
                             active_trade = None
                             save_daily_state(None)
+                            ref_high = None
 
                         elif eval_low <= t2 and active_trade.get("highest_target", 0) < 2:
                             active_trade["highest_target"] = 2
@@ -541,78 +478,82 @@ def main():
                         elif eval_low <= t1 and active_trade.get("highest_target", 0) < 1:
                             active_trade["highest_target"] = 1
                             active_trade["sl"] = entry
-                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nTrailing SL moved to Cost ({entry:.2f}).")
+                            send_telegram_alert(f"🎯 <b>TARGET 1 HIT! [SELL]</b>\nSpot: {eval_low:.2f}\nTrailing SL moved to Cost ({entry:.2f}). Ready for next signals.")
                             save_daily_state(active_trade)
+                            # T1 അടിച്ചതിനാൽ trade completed ആയി കണക്കാക്കി പുതിയ സിഗ്നലിനായി സ്കാനിംഗ് അനുവദിക്കുന്നു
+                            active_trade["status"] = "Target 1 Achieved"
+                            active_trade["exit_price"] = t1
+                            active_trade["pnl"] = entry - t1
+                            record_trade_to_ledger(active_trade)
+                            active_trade = None
+                            save_daily_state(None)
+                            ref_high = None
 
                         elif eval_high >= sl:
                             pnl = entry - sl
                             active_trade["exit_price"] = sl
                             active_trade["pnl"] = pnl
-
-                            if active_trade.get("highest_target", 0) >= 1:
-                                active_trade["status"] = f"Target {active_trade['highest_target']} Achieved (Trail Exit)"
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nSpot: {eval_high:.2f}\nClosed in Profit/Cost: {pnl:+.2f} Pts")
-                            else:
-                                active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {eval_high:.2f}\nPoints: {pnl:.2f} Pts")
-
+                            active_trade["status"] = "Stop Loss Hit"
                             record_trade_to_ledger(active_trade)
+                            send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nSpot: {eval_high:.2f}\nPoints: {pnl:.2f} Pts")
                             active_trade = None
                             save_daily_state(None)
+                            ref_high = None
 
                 # ----------------------------------------------------
-                # SCENARIO B: SCAN FOR NEW TRADES (30-PT TARGET/SL)
+                # SCENARIO B: SCAN FOR NEW TRADES (ONLY IF NO TRADE)
                 # ----------------------------------------------------
                 else:
-                    trigger = None
-                    if current_price > ref_high:
-                        trigger = "BUY"
-                    elif current_price < ref_low:
-                        trigger = "SELL"
+                    if ref_high is not None and ref_low is not None:
+                        trigger = None
+                        if current_price > ref_high:
+                            trigger = "BUY"
+                        elif current_price < ref_low:
+                            trigger = "SELL"
 
-                    if trigger:
-                        entry = current_price
-                        entry_time_display = now.strftime('%I:%M:%S %p')
-                        fixed_risk = 30.0
+                        if trigger:
+                            entry = current_price
+                            entry_time_display = now.strftime('%I:%M:%S %p')
+                            fixed_risk = 30.0
 
-                        if trigger == "BUY":
-                            sl = round(entry - fixed_risk, 2)
-                            t1 = round(entry + fixed_risk, 2)
-                            t2 = round(entry + (fixed_risk * 2.0), 2)
-                            t3 = round(entry + (fixed_risk * 3.0), 2)
-                        else:
-                            sl = round(entry + fixed_risk, 2)
-                            t1 = round(entry - fixed_risk, 2)
-                            t2 = round(entry - (fixed_risk * 2.0), 2)
-                            t3 = round(entry - (fixed_risk * 3.0), 2)
+                            if trigger == "BUY":
+                                sl = round(entry - fixed_risk, 2)
+                                t1 = round(entry + fixed_risk, 2)
+                                t2 = round(entry + (fixed_risk * 2.0), 2)
+                                t3 = round(entry + (fixed_risk * 3.0), 2)
+                            else:
+                                sl = round(entry + fixed_risk, 2)
+                                t1 = round(entry - fixed_risk, 2)
+                                t2 = round(entry - (fixed_risk * 2.0), 2)
+                                t3 = round(entry - (fixed_risk * 3.0), 2)
 
-                        active_trade = {
-                            "date": today_date_str,
-                            "index": "NIFTY 50",
-                            "side": trigger,
-                            "entry": entry,
-                            "sl": sl,
-                            "t1": t1,
-                            "t2": t2,
-                            "t3": t3,
-                            "highest_target": 0,
-                            "time": entry_time_display
-                        }
-                        save_daily_state(active_trade)
+                            active_trade = {
+                                "date": today_date_str,
+                                "index": "NIFTY 50",
+                                "side": trigger,
+                                "entry": entry,
+                                "sl": sl,
+                                "t1": t1,
+                                "t2": t2,
+                                "t3": t3,
+                                "highest_target": 0,
+                                "time": entry_time_display
+                            }
+                            save_daily_state(active_trade)
 
-                        msg = (
-                            f"⚡ <b>{trigger} SIGNAL</b>\n\n"
-                            f"• <b>Entry:</b> {entry:.2f}\n"
-                            f"• <b>Entry Time:</b> {entry_time_display} IST\n"
-                            f"• <b>Spot:</b> {current_price:.2f}\n"
-                            f"• <b>Stop Loss:</b> {sl:.2f}\n"
-                            f"• <b>T1:</b> {t1:.2f}\n"
-                            f"• <b>T2:</b> {t2:.2f}\n"
-                            f"• <b>T3:</b> {t3:.2f}"
-                        )
-                        send_telegram_alert(msg)
+                            msg = (
+                                f"⚡ <b>{trigger} SIGNAL</b>\n\n"
+                                f"• <b>Entry:</b> {entry:.2f}\n"
+                                f"• <b>Entry Time:</b> {entry_time_display} IST\n"
+                                f"• <b>Spot:</b> {current_price:.2f}\n"
+                                f"• <b>Stop Loss:</b> {sl:.2f}\n"
+                                f"• <b>T1:</b> {t1:.2f}\n"
+                                f"• <b>T2:</b> {t2:.2f}\n"
+                                f"• <b>T3:</b> {t3:.2f}"
+                            )
+                            send_telegram_alert(msg)
 
-        # 03:25 PM Auto Square Off (Joiners & Admin)
+        # 03:25 PM Auto Square Off
         if current_time >= dtime(15, 25) and active_trade is not None:
             entry = active_trade["entry"]
             last_prc = current_price if 'current_price' in locals() and current_price else entry
