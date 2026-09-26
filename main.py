@@ -2,667 +2,583 @@ import os
 import sys
 import json
 import time
-import pytz
-import pyotp
-import logging
-import requests
 import smtplib
+import calendar
+import requests
+import pyotp
+import numpy as np
+import pandas as pd
+from datetime import datetime, date, timedelta, time as dtime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-from datetime import datetime, timedelta, time as dtime
-from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
-import yfinance as yf
-from nselib import capital_market
+import pytz
 
-# Angel One SmartAPI
+# SmartAPI (Angel One)
 from SmartApi import SmartConnect
 
-from reportlab.lib.pagesizes import letter, landscape
+# ReportLab for PDF generation
+from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# ==========================================
-# 1. LOGGING & BASIC CONFIGURATION
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("SAS_TRACKER")
+# ================= CONFIGURATION =================
+ANGEL_API_KEY = "Qm1mu8xU[span_5](start_span)"[span_5](end_span)
+ANGEL_TOTP_KEY = "XXWTRAQWY6B4XGDBHD2YAJRVJE[span_6](start_span)"[span_6](end_span)
+ANGEL_CLIENT_CODE = "YOUR_CLIENT_ID"   # Angel One Client ID
+ANGEL_PIN = "YOUR_4_DIGIT_PIN"         # Angel One MPIN
 
+BOT_TOKEN = "8804327561:AAECrvtUOMCYB80L0ZchoKy_YDpwJ52zQA8[span_7](start_span)"[span_7](end_span)
+ADMIN_CHAT_ID = "6789591588[span_8](start_span)"[span_8](end_span)
+CHANNEL_CHAT_ID = "-100XXXXXXXXXX"     # ടെലിഗ്രാം ചാനൽ ID
+
+ADMIN_EMAIL = "shinos99@gmail.com"
+GMAIL_APP_PASS = "wgms etgl eklv cdja[span_9](start_span)"[span_9](end_span)
+
+STATE_FILE = "sas_bot_state.json"
+HISTORY_FILE = "sas_expiry_cycle_trades.json"  # Expiry-to-Expiry ട്രേഡ് ബാക്കപ്പ്
 IST = pytz.timezone("Asia/Kolkata")
 
-# Angel One SmartAPI Credentials
-ANGEL_API_KEY = os.getenv("ANGEL_API_KEY", "Qm1mu8xU")
-ANGEL_CLIENT_ID = os.getenv("ANGEL_CLIENT_ID", "AACM196001")
-ANGEL_MPIN = os.getenv("ANGEL_MPIN", "4099")
-ANGEL_TOTP_KEY = os.getenv("ANGEL_TOTP_KEY", "XXWTRAQWY6B4XGDBHD2YAJRVJE")
-
-# Telegram Bot Credentials
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004416495917")
-TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "6789591588")
-PUBLIC_ALERT_IDS = [TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_CHAT_ID]
-
-# Email Credentials
-SENDER_EMAIL = "shinos99@gmail.com"
-SENDER_APP_PASSWORD = "xufefwfphwsomsnu"
-RECEIVER_EMAILS = ["shinos99@gmail.com"]
-
-# State Files
-DAILY_STATE_FILE = "daily_active_trades.json"
-EXPIRY_LEDGER_FILE = "expiry_trades_ledger.json"
-
-telegram_session = requests.Session()
-executor = ThreadPoolExecutor(max_workers=4)
+# NSE ട്രേഡിംഗ് ഹോളിഡേ ലിസ്റ്റ് (മാതൃക - അവധി ദിവസങ്ങളിൽ എക്സ്പയറി തൊട്ടുമുമ്പുള്ള ദിവസമാകും)
+NSE_HOLIDAYS_2026 = [
+    "2026-01-26", "2026-03-03", "2026-03-26", "2026-04-03", 
+    "2026-04-14", "2026-05-01", "2026-08-15", "2026-10-02", 
+    "2026-10-20", "2026-11-08", "2026-12-25"
+]
 
 smart_api = None
 
-# ==========================================
-# 2. ANGEL ONE LOGIN & LIVE FEED SETUP
-# ==========================================
-def init_angel_one():
+# ================= MONTHLY EXPIRY CALCULATOR =================
+def get_monthly_expiry_date(year, month):
+    """
+    മാസത്തിലെ അവസാന ട്രേഡിംഗ് ചൊവ്വാഴ്ചയോ/വ്യാഴാഴ്ചയോ ഹോളിഡേ ആണെങ്കിൽ
+    തൊട്ടുമുമ്പത്തെ ട്രേഡിംഗ് ദിനം എക്സ്പയറിയായി ഓട്ടോമാറ്റിക് ആയി കണ്ടുപിടിക്കുന്നു.
+    (ഇവിടെ നിഫ്റ്റി മന്ത്ലി എക്സ്പയറി വ്യാഴാഴ്ച/ചൊവ്വാഴ്ച ബേസ് ചെയ്ത് പ്രവർത്തിക്കും)
+    """
+    last_day = calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+
+    # മാസത്തിലെ അവസാന വ്യാഴാഴ്ച കണ്ടെത്തുന്നു (Thursday = 3, ചൊവ്വാഴ്ചയാണെങ്കിൽ 1)
+    target_weekday = 3 
+    while d.weekday() != target_weekday:
+        d -= timedelta(days=1)
+
+    # അവധി ദിനമാണെങ്കിൽ (Holiday / Weekend) തൊട്ടുമുമ്പത്തെ ട്രേഡിംഗ് ദിവസത്തിലേക്ക് മാറ്റുന്നു
+    while d.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026 or d.weekday() >= 5:
+        d -= timedelta(days=1)
+
+    return d
+
+def is_today_monthly_expiry():
+    today = datetime.now(IST).date()
+    expiry_date = get_monthly_expiry_date(today.year, today.month)
+    return today == expiry_date
+
+# ================= ANGEL ONE API =================
+def init_angel_session():
     global smart_api
     try:
         smart_api = SmartConnect(api_key=ANGEL_API_KEY)
         totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
-        data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
-        if data.get('status'):
-            logger.info("Angel One SmartAPI login successful! Real-time tick engine ready.")
+        data = smart_api.generateSession(ANGEL_CLIENT_CODE, ANGEL_PIN, totp)
+        if data and data.get('status'):
+            print("Angel One Session Authenticated Successfully.")
             return True
         else:
-            logger.error(f"Angel One Login Failed: {data.get('message')}")
+            print("Angel One Login Failed.")
             return False
     except Exception as e:
-        logger.error(f"Error connecting to Angel One: {e}")
+        print(f"Error during Angel One login: {e}")
         return False
 
-def get_angel_live_tick():
-    """NIFTY 50 Live Spot Price from Angel One (NSE Token: 99926000 / 26000)"""
+def get_angel_nifty_candle_data():
     global smart_api
     try:
-        if smart_api is None:
-            init_angel_one()
-        # NIFTY Index token in Angel One is 99926000 (Exchange: NSE)
-        res = smart_api.ltpData(exchange="NSE", tradingsymbol="NIFTY", symboltoken="99926000")
-        if res and res.get('status') and 'data' in res:
-            return float(res['data']['ltp'])
-        
-        # Fallback token check
-        res2 = smart_api.ltpData(exchange="NSE", tradingsymbol="NIFTY 50", symboltoken="26000")
-        if res2 and res2.get('status') and 'data' in res2:
-            return float(res2['data']['ltp'])
+        now_dt = datetime.now(IST)
+        from_date = (now_dt - pd.Timedelta(days=5)).strftime("%Y-%m-%d 09:15")
+        to_date = now_dt.strftime("%Y-%m-%d %H:%M")
+
+        historic_param = {
+            "exchange": "NSE",
+            "symboltoken": "99926000",
+            "interval": "FIVE_MINUTE",
+            "fromdate": from_date,
+            "todate": to_date
+        }
+        res = smart_api.getCandleData(historic_param)
+        if res and res.get('status') and res.get('data'):
+            cols = ["Timestamp", "Open", "High", "Low", "Close", "Volume"]
+            df = pd.DataFrame(res['data'], columns=cols)
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+            df.set_index('Timestamp', inplace=True)
+            return df
+        else:
+            init_angel_session()
+            return None
     except Exception as e:
-        logger.error(f"Angel One Live LTP Error: {e}")
-        # Auto re-login if session expires
-        init_angel_one()
-    return None
+        print(f"Data Fetch Exception: {e}")
+        return None
 
-# ==========================================
-# 3. DISPATCH FUNCTIONS (MESSAGES, PDF & EMAIL)
-# ==========================================
-def _send_single_telegram(cid, message, parse_mode):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": cid, "text": message, "parse_mode": parse_mode}
-    try:
-        telegram_session.post(url, json=payload, timeout=10)
-    except Exception as e:
-        logger.error(f"[TELEGRAM ERROR] {cid}: {e}")
-
-def send_telegram_alert(message, parse_mode="HTML", chat_id=None):
-    if not TELEGRAM_BOT_TOKEN:
-        return
-    targets = [chat_id] if chat_id else PUBLIC_ALERT_IDS
-    for cid in targets:
-        if cid:
-            executor.submit(_send_single_telegram, cid, message, parse_mode)
-
-def send_telegram_document(file_path, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    for chat_id in PUBLIC_ALERT_IDS:
-        try:
-            with open(file_path, 'rb') as doc:
-                telegram_session.post(url, data={'chat_id': chat_id, 'caption': caption}, files={'document': doc}, timeout=25)
-        except Exception as e:
-            logger.error(f"Telegram Doc Error ({chat_id}): {e}")
-
-def send_email_with_pdf(file_path, subject, body):
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = SENDER_EMAIL
-        msg['To'] = ", ".join(RECEIVER_EMAILS)
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-
-        with open(file_path, "rb") as attachment:
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(file_path)}")
-        msg.attach(part)
-
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
-        server.quit()
-        logger.info("PDF Report emailed successfully.")
-    except Exception as e:
-        logger.error(f"Email Dispatch Warning: {e}")
-
-# ==========================================
-# 4. NSE HOLIDAY & WEEKEND DETECTION
-# ==========================================
-def get_nse_holidays():
-    try:
-        holidays_df = capital_market.holiday_trading()
-        if holidays_df is not None and not holidays_df.empty and 'tradingDate' in holidays_df.columns:
-            return [datetime.strptime(d, '%d-%b-%Y').date() for d in holidays_df['tradingDate'].values]
-    except Exception as e:
-        logger.error(f"Error fetching NSE holidays: {e}")
-    return []
-
-holiday_dates = get_nse_holidays()
-today_dt = datetime.now(IST)
-today_date = today_dt.date()
-today_str_display = today_dt.strftime('%d-%b-%Y')
-
-if today_dt.weekday() in [5, 6]:
-    day_name = "Saturday" if today_dt.weekday() == 5 else "Sunday"
-    send_telegram_alert(f"🏖️ <b>WEEKEND MARKET HOLIDAY ({day_name})</b>\n• Market is closed today.")
-    sys.exit(0)
-
-if today_date in holiday_dates:
-    send_telegram_alert(f"🏖️ <b>NSE MARKET HOLIDAY TODAY ({today_str_display})</b>\n• Market is closed.")
-    sys.exit(0)
-
-def is_today_monthly_tuesday_expiry():
-    today = datetime.now(IST).date()
-    next_month = today.replace(day=28) + timedelta(days=4)
-    last_day_of_month = next_month - timedelta(days=next_month.day)
+# ================= TELEGRAM UTILS =================
+def send_telegram(text: str, target="admin"):
+    header = "📢 *SAS LEVEL TRACKER*\n[span_10](start_span)"[span_10](end_span)
+    full_text = f"{header}\n{text}"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage[span_11](start_span)"[span_11](end_span)
     
-    cur_day = last_day_of_month
-    while cur_day.weekday() != 1:
-        cur_day -= timedelta(days=1)
-        
-    while cur_day in holiday_dates or cur_day.weekday() in [5, 6]:
-        cur_day -= timedelta(days=1)
-        
-    return today == cur_day
-
-# ==========================================
-# 5. STATE & LEDGER MANAGEMENT
-# ==========================================
-def load_backup_state():
-    today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    if os.path.exists(DAILY_STATE_FILE):
-        try:
-            with open(DAILY_STATE_FILE, "r") as f:
-                data = json.load(f)
-                if data.get("date") == today_str:
-                    logger.info("Daily state restored successfully.")
-                    return data.get("active_trade")
-        except Exception as e:
-            logger.error(f"Error loading daily state: {e}")
-    return None
-
-def save_daily_state(active_trade):
-    today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    data = {"date": today_str, "active_trade": active_trade}
     try:
-        with open(DAILY_STATE_FILE, "w") as f:
-            json.dump(data, f, indent=4)
+        requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": full_text, "parse_mode": "Markdown"}, timeout=10)[span_12](start_span)[span_12](end_span)
     except Exception as e:
-        logger.error(f"Error saving daily state: {e}")
+        print(f"Telegram Admin Error: {e}")
 
-def load_expiry_ledger():
-    if os.path.exists(EXPIRY_LEDGER_FILE):
+    if target == "all" and CHANNEL_CHAT_ID and not CHANNEL_CHAT_ID.startswith("-100XX"):
         try:
-            with open(EXPIRY_LEDGER_FILE, "r") as f:
+            requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": full_text, "parse_mode": "Markdown"}, timeout=10)
+        except Exception as e:
+            print(f"Telegram Channel Error: {e}")
+
+# ================= STATE & TRADE BACKUP =================
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
                 return json.load(f)
         except Exception:
-            return []
-    return []
+            pass
+    return {
+        "active_trade": None,
+        "support_sent_today": False,[span_13](start_span)[span_13](end_span)
+        "daily_report_sent_today": False,[span_14](start_span)[span_14](end_span)
+        "monthly_report_sent_today": False,[span_15](start_span)[span_15](end_span)
+        "startup_alert_sent": False[span_16](start_span)[span_16](end_span)
+    }
 
-def record_trade_to_ledger(trade_record):
-    ledger = load_expiry_ledger()
-    ledger.append(trade_record)
-    try:
-        with open(EXPIRY_LEDGER_FILE, "w") as f:
-            json.dump(ledger, f, indent=4)
-    except Exception as e:
-        logger.error(f"Error saving ledger: {e}")
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
 
-def clear_expiry_ledger():
-    try:
-        if os.path.exists(EXPIRY_LEDGER_FILE):
-            os.remove(EXPIRY_LEDGER_FILE)
-    except Exception:
-        pass
+def log_trade(trade_record):
+    """എല്ലാ ട്രേഡുകളും Expiry-to-Expiry സൈക്കിളിലേക്ക് കൃത്യമായി സേവ് ചെയ്യുന്നു"""
+    trades = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                trades = json.load(f)
+        except Exception:
+            trades = []
+    trades.append(trade_record)
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(trades, f, indent=4)
 
-# ==========================================
-# 6. PDF REPORT GENERATOR
-# ==========================================
-def generate_pdf_report(filename, title_text, date_text, logs, total_pnl):
-    doc = SimpleDocTemplate(filename, pagesize=landscape(letter), rightMargin=15, leftMargin=15, topMargin=20, bottomMargin=20)
+def clear_expiry_cycle_trades():
+    """എക്സ്പയറി റിപ്പോർട്ട് അയച്ചുകഴിഞ്ഞാൽ അടുത്ത സൈക്കിളിനായി ഫയൽ റീസെറ്റ് ചെയ്യുന്നു"""
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "w") as f:
+            json.dump([], f)
+
+# ================= PDF & EMAIL REPORT GENERATION =================
+def generate_pdf_report(filename, title, subtitle, trades):
+    doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
     elements = []
 
-    title_style = ParagraphStyle('RepTitle', parent=styles['Heading1'], fontSize=14, leading=17, textColor=colors.HexColor("#1A365D"), alignment=1)
-    elements.append(Paragraph(f"SAS LEVEL TRACKER - {title_text}", title_style))
-    pnl_status_text = f"NET POINTS: +{total_pnl:.2f} Pts" if total_pnl >= 0 else f"NET POINTS: {total_pnl:.2f} Pts"
-    elements.append(Paragraph(f"Strategy: SAS LEVEL TRACKER | Timeline: {date_text} | Total Events: {len(logs)} | <b>{pnl_status_text}</b>", styles['Normal']))
-    elements.append(Spacer(1, 10))
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor("#1A365D"), spaceAfter=10)
+    elements.append(Paragraph(title, title_style))
+    elements.append(Paragraph(subtitle, styles['Normal']))
+    elements.append(Spacer(1, 15))
 
-    headers = ["SL", "Date", "Index & Type", "Entry & Time", "Level 1", "Level 2", "Level 3", "Threshold", "Points", "Status"]
-    table_rows = [headers]
+    # Strict Entry to Exit Table
+    table_data = [["Date", "Signal", "Entry Price", "Exit Price", "P&L (Points)", "Reason", "Time"]][span_17](start_span)[span_17](end_span)
+    total_points = 0.0
 
-    for i, l in enumerate(logs, 1):
-        table_rows.append([
-            str(i), l.get('date', '-'), f"{l.get('index', 'NIFTY 50')}\n({l.get('side', l.get('type', '-'))})",
-            f"{l.get('entry', 0.0):.2f}\n({l.get('time', l.get('entry_time', '-'))})",
-            f"{l.get('t1', 0.0):.2f}" if l.get('highest_target', 0) >= 1 or l.get('t1_hit') else "-",
-            f"{l.get('t2', 0.0):.2f}" if l.get('highest_target', 0) >= 2 or l.get('t2_hit') else "-",
-            f"{l.get('t3', 0.0):.2f}" if l.get('highest_target', 0) >= 3 or l.get('t3_hit') else "-",
-            f"{l.get('sl', 0.0):.2f}",
-            f"{l.get('pnl', 0.0):+.2f}",
-            l.get('status', '-')
-        ])
+    if not trades:
+        table_data.append(["-", "No Trades", "-", "-", "-", "-", "-"])
+    else:
+        for t in trades:
+            pts = round(t['pnl_points'], 2)[span_18](start_span)[span_18](end_span)
+            total_points += pts
+            table_data.append([
+                t.get('date', '-'),
+                t['action'],
+                f"₹{t['entry']}",[span_19](start_span)[span_19](end_span)
+                f"₹{t['exit']}",[span_20](start_span)[span_20](end_span)
+                f"{'+' if pts > 0 else ''}{pts}",[span_21](start_span)[span_21](end_span)
+                t['reason'],
+                t['exit_time']
+            ])
 
-    table_rows.append([
-        "TOTAL", "-", "-", "-", "-", "-", "-", "TOTAL POINTS", f"{total_pnl:+.2f}", "CYCLE FINISHED"
-    ])
-
-    trade_table = Table(table_rows, colWidths=[25, 65, 80, 80, 80, 80, 80, 80, 65, 110])
-    trade_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2B6CB0")),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-        ('FONTSIZE', (0, 0), (-1, -1), 7.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#EDF2F7")),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+    t = Table(table_data, colWidths=[70, 60, 80, 80, 85, 120, 60])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2B6CB0")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E0")),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#F7FAFC")]),
     ]))
-    elements.append(trade_table)
+    elements.append(t)
+    elements.append(Spacer(1, 20))
+
+    summary_text = f"<b>Net Cumulative P&L (Strict Entry to Exit):</b> {'+' if total_points > 0 else ''}{round(total_points, 2)} Points[span_22](start_span)"[span_22](end_span)
+    elements.append(Paragraph(summary_text, styles['Heading2']))
     doc.build(elements)
+    return filename
 
-# ==========================================
-# 7. MARKET DATA & CALCULATIONS (30 PTS 50/50)
-# ==========================================
-def fetch_previous_ohlc():
+def send_email_with_attachment(pdf_path, subject, body_text):
     try:
-        ticker = yf.Ticker("^NSEI")
-        df = ticker.history(period="5d", interval="1d")
-        if len(df) >= 2:
-            prev_day = df.iloc[-2]
-            return float(prev_day['High']), float(prev_day['Low']), float(prev_day['Close'])
+        msg = MIMEMultipart()
+        msg['From'] = ADMIN_EMAIL
+        msg['To'] = ADMIN_EMAIL
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body_text, 'plain'))
+
+        with open(pdf_path, "rb") as attachment:
+            p = MIMEBase('application', 'octet-stream')
+            p.set_payload(attachment.read())
+            encoders.encode_base64(p)
+            p.add_header('Content-Disposition', f"attachment; filename= {os.path.basename(pdf_path)}")
+            msg.attach(p)
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(ADMIN_EMAIL, GMAIL_APP_PASS.replace(" ", ""))[span_23](start_span)[span_23](end_span)
+        server.sendmail(ADMIN_EMAIL, ADMIN_EMAIL, msg.as_string())
+        server.quit()
+        print(f"Email sent successfully: {subject}")
     except Exception as e:
-        logger.error(f"Error fetching OHLC: {e}")
-    return None, None, None
+        print(f"Failed to send email: {e}")
 
-def calculate_levels(high, low, close):
-    diff = high - low
-    levels = {
-        "H5": close + (1.1 * diff),
-        "H4": close + (diff * 1.1 / 2.0),
-        "H3": close + (diff * 1.1 / 4.0),
-        "L3": close - (diff * 1.1 / 4.0),
-        "L4": close - (diff * 1.1 / 2.0),
-        "L5": close - (1.1 * diff),
-        "Dynamic_Risk": 30.0  # 30 Points Fixed Risk
+# ================= TECHNICAL CALCULATIONS =================
+def calculate_camarilla_levels(df_daily):
+    prev = df_daily.iloc[-2]
+    h, l, c = float(prev['High']), float(prev['Low']), float(prev['Close'])
+    diff = h - l
+    return {
+        "H4": round(c + (diff * 1.1 / 2.0), 2),
+        "H3": round(c + (diff * 1.1 / 4.0), 2),
+        "L3": round(c - (diff * 1.1 / 4.0), 2),
+        "L4": round(c - (diff * 1.1 / 2.0), 2),
+        "PP": round((h + l + c) / 3.0, 2)
     }
-    return levels
 
-# ==========================================
-# 8. CORE EXECUTION BOT
-# ==========================================
-def main():
-    logger.info("Initializing SAS Level Tracker Bot with Angel One SmartAPI...")
+# ================= ENGINE CYCLE =================
+def process_market_cycle(state):
+    now_ist = datetime.now(IST)
+    curr_time = now_ist.time()
+    today_str = now_ist.strftime("%Y-%m-%d")
 
-    init_angel_one()
+    # 1. 09:00 AM - Bot Auto-run Alert (Admin Only)[span_24](start_span)[span_24](end_span)
+    if dtime(9, 0) <= curr_time < dtime(9, 5):
+        if not state.get("startup_alert_sent"):
+            send_telegram("🚀 *SYSTEM LIVE:* Angel One API Active.\nZero-delay continuous scan started at 9:00 AM.", target="admin")[span_25](start_span)[span_25](end_span)
+            state["startup_alert_sent"] = True
+            save_state(state)
 
-    high, low, close = fetch_previous_ohlc()
-    if not high:
-        logger.error("Failed to obtain previous session OHLC.")
+    df = get_angel_nifty_candle_data()
+    if df is None or len(df) < 20:
         return
 
-    levels = calculate_levels(high, low, close)
-    dynamic_risk = levels["Dynamic_Risk"]
-    logger.info(f"NIFTY Levels Loaded: R4={levels['H4']:.2f}, R3={levels['H3']:.2f}, S3={levels['L3']:.2f}, S4={levels['L4']:.2f}, Risk={dynamic_risk} Pts")
+    # 2. 09:05 AM - Nifty Resistance and Support Levels[span_26](start_span)[span_26](end_span)
+    if dtime(9, 5) <= curr_time < dtime(9, 15):
+        if not state.get("support_sent_today"):
+            df_daily = df.resample('D').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+            levels = calculate_camarilla_levels(df_daily)
+            msg = (
+                f"📊 *NIFTY INTRADAY LEVELS (Angel One Live)*\n\n"
+                f"• *Resistance 2 (Breakout H4):* ₹{levels['H4']}\n"
+                f"• *Resistance 1 (Cam H3):* ₹{levels['H3']}\n"
+                f"• *Pivot Point (PP):* ₹{levels['PP']}\n"
+                f"• *Support 1 (Cam L3):* ₹{levels['L3']}\n"
+                f"• *Support 2 (Breakdown L4):* ₹{levels['L4']}"
+            )
+            send_telegram(msg, target="all")[span_27](start_span)[span_27](end_span)
+            state["support_sent_today"] = True
+            save_state(state)
 
-    startup_alert_sent = False
-    levels_posted = False
-    active_trade = load_backup_state()
-    prev_tick = None
-    last_heartbeat_hour = -1
-    today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+    # 3. 09:15 AM to 03:00 PM - Signal Processing[span_28](start_span)[span_28](end_span)
+    if dtime(9, 15) <= curr_time <= dtime(15, 0):[span_29](start_span)[span_29](end_span)
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        df['ATR'] = tr.rolling(14).mean()
+        df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
+        df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
 
-    sl_cooldown_until = None
-    last_sl_side = None
+        candle = df.iloc[-1]
+        prior = df.iloc[-2]
+        c_close = float(candle['Close'])
+        c_high = float(candle['High'])
+        c_low = float(candle['Low'])
+        c_atr = float(candle['ATR'])
+        c_ema9 = float(candle['EMA9'])
+        c_ema21 = float(candle['EMA21'])
+
+        df_daily = df.resample('D').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+        levels = calculate_camarilla_levels(df_daily)
+        active = state.get("active_trade")[span_30](start_span)[span_30](end_span)
+
+        # നിലവിലുള്ള ട്രേഡ് പരിശോധിക്കുന്നു[span_31](start_span)[span_31](end_span)
+        if active is not None:
+            # T1 Achieved[span_32](start_span)[span_32](end_span)
+            if not active["t1_hit"]:[span_33](start_span)[span_33](end_span)
+                if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):[span_34](start_span)[span_34](end_span)
+                    active["t1_hit"] = True[span_35](start_span)[span_35](end_span)
+                    active["sl_active"] = False # T1 അടിച്ച ശേഷം SL പൂർണ്ണമായി ഒഴിവാക്കുന്നു[span_36](start_span)[span_36](end_span)
+                    msg = (
+                        f"🎯 *TARGET 1 (T1) ACHIEVED! [₹{active['t1']}]*\n\n[span_37](start_span)"[span_37](end_span)
+                        f"• Trade secured: **Stop Loss Removed Completely**.\n[span_38](start_span)"[span_38](end_span)
+                        f"• Now trailing for Target 2 (₹{active['t2']}) & Target 3 (₹{active['t3']}).[span_39](start_span)"[span_39](end_span)
+                    )
+                    send_telegram(msg, target="all")[span_40](start_span)[span_40](end_span)
+                    save_state(state)
+
+            # T2 Achieved[span_41](start_span)[span_41](end_span)
+            if active["t1_hit"] and not active["t2_hit"]:[span_42](start_span)[span_42](end_span)
+                if (active["action"] == "BUY" and c_high >= active["t2"]) or (active["action"] == "SELL" and c_low <= active["t2"]):[span_43](start_span)[span_43](end_span)
+                    active["t2_hit"] = True[span_44](start_span)[span_44](end_span)
+                    send_telegram(f"🚀 *TARGET 2 (T2) ACHIEVED! [₹{active['t2']}]*\nTrail stops to lock profit.", target="all")[span_45](start_span)[span_45](end_span)
+                    save_state(state)
+
+            # T3 Hit (Complete Exit)[span_46](start_span)[span_46](end_span)
+            if active["t2_hit"] and not active["t3_hit"]:[span_47](start_span)[span_47](end_span)
+                if (active["action"] == "BUY" and c_high >= active["t3"]) or (active["action"] == "SELL" and c_low <= active["t3"]):[span_48](start_span)[span_48](end_span)
+                    active["t3_hit"] = True[span_49](start_span)[span_49](end_span)
+                    # Strict Entry to Exit calculation
+                    exit_price = active["t3"]
+                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)[span_50](start_span)[span_50](end_span)
+                    send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT! [₹{exit_price}]*\nExit full position.", target="all")[span_51](start_span)[span_51](end_span)
+                    
+                    log_trade({
+                        "date": today_str, "action": active["action"],
+                        "entry": active["entry"], "exit": exit_price,[span_52](start_span)[span_52](end_span)
+                        "pnl_points": pnl, "reason": "Target 3 Achieved",[span_53](start_span)[span_53](end_span)
+                        "exit_time": now_ist.strftime("%H:%M")[span_54](start_span)[span_54](end_span)
+                    })
+                    state["active_trade"] = None[span_55](start_span)[span_55](end_span)
+                    save_state(state)
+                    return
+
+            # SL Check (T1-ന് മുൻപ് മാത്രം)[span_56](start_span)[span_56](end_span)
+            if active["sl_active"]:[span_57](start_span)[span_57](end_span)
+                sl_hit = (active["action"] == "BUY" and c_low <= active["sl"]) or (active["action"] == "SELL" and c_high >= active["sl"])[span_58](start_span)[span_58](end_span)
+                if sl_hit:[span_59](start_span)[span_59](end_span)
+                    exit_price = active["sl"]
+                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)[span_60](start_span)[span_60](end_span)
+                    send_telegram(f"🛑 *STOP LOSS HIT! [₹{exit_price}]*\nExit trade.", target="all")[span_61](start_span)[span_61](end_span)
+                    log_trade({
+                        "date": today_str, "action": active["action"],
+                        "entry": active["entry"], "exit": exit_price,[span_62](start_span)[span_62](end_span)
+                        "pnl_points": pnl, "reason": "Stop Loss Hit",[span_63](start_span)[span_63](end_span)
+                        "exit_time": now_ist.strftime("%H:%M")[span_64](start_span)[span_64](end_span)
+                    })
+                    state["active_trade"] = None[span_65](start_span)[span_65](end_span)
+                    save_state(state)
+                    return
+
+        # പുതിയ സിഗ്നൽ സ്കാനിംഗ്[span_66](start_span)[span_66](end_span)
+        new_signal = None
+        if float(prior['Close']) <= levels['H4'] and c_close > levels['H4'] and c_ema9 > c_ema21:
+            new_signal = "BUY"
+        elif float(prior['Close']) >= levels['L4'] and c_close < levels['L4'] and c_ema9 < c_ema21:
+            new_signal = "SELL"
+
+        if new_signal:
+            if state["active_trade"] is None:[span_67](start_span)[span_67](end_span)
+                trigger_entry(new_signal, c_close, c_atr, now_ist, state)[span_68](start_span)[span_68](end_span)
+            elif state["active_trade"]["t1_hit"]:[span_69](start_span)[span_69](end_span)
+                # T1 അടിച്ച ശേഷം പുതിയ സിഗ്നൽ വന്നാൽ Exit Previous Trade Alert നൽകുന്നു[span_70](start_span)[span_70](end_span)
+                prev_action = state["active_trade"]["action"]
+                prev_entry = state["active_trade"]["entry"][span_71](start_span)[span_71](end_span)
+                exit_price = round(c_close, 2)
+                pnl = (exit_price - prev_entry) if prev_action == "BUY" else (prev_entry - exit_price)[span_72](start_span)[span_72](end_span)
+                
+                send_telegram(
+                    f"⚠️ *EXIT PREVIOUS TRADE ALERT*\n\n[span_73](start_span)"[span_73](end_span)
+                    f"New market momentum formed.\n[span_74](start_span)"[span_74](end_span)
+                    f"• *Exit Current Trade At:* ₹{exit_price}\n[span_75](start_span)"[span_75](end_span)
+                    f"• *Strict Gain Locked:* {'+' if pnl > 0 else ''}{round(pnl, 2)} Pts",[span_76](start_span)[span_76](end_span)
+                    target="all[span_77](start_span)"[span_77](end_span)
+                )
+                log_trade({
+                    "date": today_str, "action": prev_action,
+                    "entry": prev_entry, "exit": exit_price,[span_78](start_span)[span_78](end_span)
+                    "pnl_points": pnl, "reason": "Replaced by New Signal",[span_79](start_span)[span_79](end_span)
+                    "exit_time": now_ist.strftime("%H:%M")[span_80](start_span)[span_80](end_span)
+                })
+                trigger_entry(new_signal, c_close, c_atr, now_ist, state)[span_81](start_span)[span_81](end_span)
+
+    # 4. 03:20 PM - ഇൻട്രാഡേ സ്ക്വയർ-ഓഫ്
+    if dtime(15, 20) <= curr_time < dtime(15, 30):
+        if state.get("active_trade") is not None:[span_82](start_span)[span_82](end_span)
+            active = state["active_trade"][span_83](start_span)[span_83](end_span)
+            exit_price = round(float(df.iloc[-1]['Close']), 2)
+            pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)[span_84](start_span)[span_84](end_span)
+            send_telegram(f"⏰ *INTRADAY AUTO SQUARE-OFF (3:20 PM)*\nExiting at ₹{exit_price}.", target="all")
+            log_trade({
+                "date": today_str, "action": active["action"],
+                "entry": active["entry"], "exit": exit_price,[span_85](start_span)[span_85](end_span)
+                "pnl_points": pnl, "reason": "Intraday Close (3:20 PM)",[span_86](start_span)[span_86](end_span)
+                "exit_time": now_ist.strftime("%H:%M")[span_87](start_span)[span_87](end_span)
+            })
+            state["active_trade"] = None[span_88](start_span)[span_88](end_span)
+            save_state(state)
+
+    # 5. 03:45 PM - എല്ലാ ദിവസവും ഡെയ്‌ലി റിപ്പോർട്ട് (Daily Report)
+    if dtime(15, 45) <= curr_time < dtime(15, 55):
+        if not state.get("daily_report_sent_today"):[span_89](start_span)[span_89](end_span)
+            # ഇന്നത്തെ ട്രേഡുകൾ മാത്രം ഫിൽട്ടർ ചെയ്യുന്നു
+            all_trades = []
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, "r") as f:
+                        all_trades = json.load(f)
+                except Exception:
+                    pass
+            today_trades = [t for t in all_trades if t.get('date') == today_str]
+
+            pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
+            generate_pdf_report(
+                pdf_filename,
+                f"SAS LEVEL TRACKER - DAILY REPORT",[span_90](start_span)[span_90](end_span)
+                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Strict Entry to Exit",[span_91](start_span)[span_91](end_span)
+                today_trades
+            )
+            send_email_with_attachment(
+                pdf_filename,
+                f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",[span_92](start_span)[span_92](end_span)
+                f"Hello Admin,\n\nPlease find attached the Daily P&L Report for {today_str}.[span_93](start_span)"[span_93](end_span)
+            )
+            net_pts = sum(t['pnl_points'] for t in today_trades)
+            send_telegram(
+                f"📄 *DAILY P&L REPORT (3:45 PM)*\n\n"
+                f"• *Date:* {today_str}\n"
+                f"• *Trades Executed:* {len(today_trades)}\n"
+                f"• *Strict Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
+                f"Verified PDF sent to Admin email ({ADMIN_EMAIL}).",[span_94](start_span)[span_94](end_span)
+                target="all[span_95](start_span)"[span_95](end_span)
+            )
+            state["daily_report_sent_today"] = True[span_96](start_span)[span_96](end_span)
+            save_state(state)
+
+    # 6. 03:45 PM - MONTHLY EXPIRY DAY ആയാൽ മാത്രം പ്രത്യേക MONTHLY REPORT[span_97](start_span)[span_97](end_span)
+    if dtime(15, 45) <= curr_time < dtime(15, 55):
+        if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):[span_98](start_span)[span_98](end_span)
+            all_cycle_trades = []
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, "r") as f:
+                        all_cycle_trades = json.load(f)
+                except Exception:
+                    pass
+
+            month_str = now_ist.strftime("%B_%Y")
+            monthly_pdf = f"SAS_Monthly_Expiry_Report_{month_str}.pdf"
+            generate_pdf_report(
+                monthly_pdf,
+                f"SAS LEVEL TRACKER - MONTHLY EXPIRY DETAILED REPORT",[span_99](start_span)[span_99](end_span)
+                f"<b>Expiry Date:</b> {today_str} | <b>Cycle:</b> Expiry to Expiry Detailed P&L",[span_100](start_span)[span_100](end_span)
+                all_cycle_trades
+            )
+            send_email_with_attachment(
+                monthly_pdf,
+                f"SAS LEVEL TRACKER: Monthly Expiry-to-Expiry Report ({month_str})",[span_101](start_span)[span_101](end_span)
+                f"Hello Admin,\n\nToday is Monthly Expiry Day. Attached is the complete Expiry-to-Expiry performance log.[span_102](start_span)"[span_102](end_span)
+            )
+            total_cycle_pts = sum(t['pnl_points'] for t in all_cycle_trades)
+            send_telegram(
+                f"🏆 *MONTHLY EXPIRY-TO-EXPIRY REPORT (3:45 PM)*\n\n[span_103](start_span)"[span_103](end_span)
+                f"Today marks the Monthly Expiry Day!\n[span_104](start_span)"[span_104](end_span)
+                f"• *Total Cycle Trades:* {len(all_cycle_trades)}\n"
+                f"• *Total Cycle Net P&L:* {'+' if total_cycle_pts > 0 else ''}{round(total_cycle_pts, 2)} Pts\n"
+                f"Detailed Monthly P&L statement dispatched to Admin email.",[span_105](start_span)[span_105](end_span)
+                target="all[span_106](start_span)"[span_106](end_span)
+            )
+            clear_expiry_cycle_trades() # അടുത്ത എക്സ്പയറി സൈക്കിളിലേക്ക് ഫയൽ റീസെറ്റ് ചെയ്യുന്നു
+            state["monthly_report_sent_today"] = True[span_107](start_span)[span_107](end_span)
+            save_state(state)
+
+def trigger_entry(action, price, atr, now_ist, state):
+    sl_dist = max(round(1.2 * atr, 1), 22.0)
+    t1_dist = round(sl_dist * 1.0, 1)
+    t2_dist = round(sl_dist * 1.8, 1)
+    t3_dist = round(sl_dist * 2.8, 1)
+
+    entry = round(price, 2)
+    if action == "BUY":
+        sl = round(entry - sl_dist, 2)
+        t1 = round(entry + t1_dist, 2)
+        t2 = round(entry + t2_dist, 2)
+        t3 = round(entry + t3_dist, 2)
+        strike = f"{round(entry / 50.0) * 50} CE"
+    else:
+        sl = round(entry + sl_dist, 2)
+        t1 = round(entry - t1_dist, 2)
+        t2 = round(entry - t2_dist, 2)
+        t3 = round(entry - t3_dist, 2)
+        strike = f"{round(entry / 50.0) * 50} PE"
+
+    msg = (
+        f"⚡ *NEW INTRADAY SIGNAL (ANGEL ONE)*\n\n"
+        f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
+        f"• *Action:* *{action}*\n"
+        f"• *Entry Price:* ₹{entry}\n[span_108](start_span)"[span_108](end_span)
+        f"• *Target 1 (T1):* ₹{t1}\n[span_109](start_span)"[span_109](end_span)
+        f"• *Target 2 (T2):* ₹{t2}\n[span_110](start_span)"[span_110](end_span)
+        f"• *Target 3 (T3):* ₹{t3}\n[span_111](start_span)"[span_111](end_span)
+        f"• *Stop Loss (SL):* ₹{sl}\n[span_112](start_span)"[span_112](end_span)
+        f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
+    )
+    send_telegram(msg, target="all")[span_113](start_span)[span_113](end_span)
+
+    state["active_trade"] = {
+        "action": action, "entry": entry,[span_114](start_span)[span_114](end_span)
+        "t1": t1, "t2": t2, "t3": t3, "sl": sl,[span_115](start_span)[span_115](end_span)
+        "t1_hit": False, "t2_hit": False, "t3_hit": False,[span_116](start_span)[span_116](end_span)
+        "sl_active": True, "entry_time": now_ist.strftime("%H:%M")[span_117](start_span)[span_117](end_span)
+    }
+    save_state(state)
+
+# ================= MASTER LOOP =================
+def main():
+    print("Starting SAS LEVEL TRACKER Service...")
+    init_angel_session()
+    state = load_state()
+
+    # എപ്പോൾ ബോട്ട് റീസ്റ്റാർട്ട് ആയാലും അഡ്മിന് മാത്രം അറിയിപ്പ് അയക്കുന്നു
+    send_telegram("🔄 *SYSTEM RESTART:* Angel One Bot successfully recovered all trade states from local backup.", target="admin")[span_118](start_span)[span_118](end_span)
 
     while True:
-        now = datetime.now(IST)
-        current_time = now.time()
+        try:
+            now_ist = datetime.now(IST)
+            curr_time = now_ist.time()
+            weekday = now_ist.weekday()
 
-        # 09:00 AM Engine Alert
-        if current_time >= dtime(9, 0) and not startup_alert_sent:
-            startup_msg = (
-                f"🚀 <b>SAS LEVEL TRACKER LIVE (09:00 AM)</b>\n\n"
-                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
-                f"📊 <b>Index:</b> NIFTY 50\n"
-                f"🕒 <b>Time:</b> {now.strftime('%I:%M:%S %p')} IST\n"
-                f"🛡️ <b>Engine Status:</b> Ultra-Fast Angel One SmartAPI Active."
-            )
-            send_telegram_alert(startup_msg)
-            startup_alert_sent = True
+            if weekday >= 5:
+                time.sleep(3600)
+                continue
 
-        # 09:05 AM - Levels Alert
-        if current_time >= dtime(9, 5) and not levels_posted:
-            msg = (
-                f"<b>⚡ DAILY MOMENTUM SPIKE LEVELS (09:05 AM)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Index:</b> NIFTY 50\n"
-                f"🔹 <b>Bullish Breakout (R4):</b> {levels['H4']:.2f}\n"
-                f"🔹 <b>Resistance Reversal (R3):</b> {levels['H3']:.2f}\n"
-                f"🔸 <b>Support Reversal (S3):</b> {levels['L3']:.2f}\n"
-                f"🔸 <b>Bearish Breakdown (S4):</b> {levels['L4']:.2f}\n"
-                f"🛡️ <b>Day Dynamic Risk:</b> {dynamic_risk:.2f} Pts\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Tracking live tick-by-tick momentum.</i>\n"
-                f"⚠️ <i>Strictly for educational study only. Not SEBI registered.</i>"
-            )
-            send_telegram_alert(msg)
-            levels_posted = True
+            # ദിവസവും അർദ്ധരാത്രിയിൽ ഫ്ലാഗുകൾ റീസെറ്റ് ചെയ്യുന്നു
+            if curr_time < dtime(8, 55):
+                state["support_sent_today"] = False[span_119](start_span)[span_119](end_span)
+                state["daily_report_sent_today"] = False[span_120](start_span)[span_120](end_span)
+                state["monthly_report_sent_today"] = False[span_121](start_span)[span_121](end_span)
+                state["startup_alert_sent"] = False[span_122](start_span)[span_122](end_span)
+                save_state(state)
+                time.sleep(60)
+                continue
 
-        # Active Scanning Window (09:15 AM - 03:25 PM)
-        if dtime(9, 15) <= current_time <= dtime(15, 25):
-            current_tick = get_angel_live_tick()
-            if current_tick:
-                if prev_tick is None:
-                    prev_tick = current_tick
-                    time.sleep(1)
-                    continue
+            # 9:00 AM മുതൽ 3:55 PM വരെ തുടർച്ചയായി റൺ ചെയ്യുന്നു[span_123](start_span)[span_123](end_span)
+            if dtime(9, 0) <= curr_time <= dtime(15, 55):
+                process_market_cycle(state)
+                time.sleep(5)  # 5 സെക്കൻഡ് ഇടവിട്ടുള്ള ലൈവ് ചെക്കിംഗ്
+            else:
+                time.sleep(60)
 
-                # SCENARIO A: MONITOR ACTIVE TRADE
-                if active_trade is not None:
-                    side = active_trade["side"]
-                    entry = active_trade["entry"]
-                    t1 = active_trade["t1"]
-                    t2 = active_trade["t2"]
-                    t3 = active_trade["t3"]
-                    sl = active_trade["sl"]
-
-                    if side == "BUY":
-                        if current_tick >= t3:
-                            pnl = t3 - entry
-                            active_trade["highest_target"] = 3
-                            active_trade["status"] = "Target 3 Achieved"
-                            active_trade["exit_price"] = t3
-                            active_trade["pnl"] = pnl
-                            record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
-                            active_trade = None
-                            save_daily_state(None)
-
-                        elif current_tick >= t2 and active_trade.get("highest_target", 0) < 2:
-                            pnl = t2 - entry
-                            active_trade["highest_target"] = 2
-                            active_trade["sl"] = t1
-                            active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Target 1 ({t1:.2f}).")
-                            save_daily_state(active_trade)
-
-                        elif current_tick >= t1 and active_trade.get("highest_target", 0) < 1:
-                            pnl = t1 - entry
-                            active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry
-                            active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed safely to Cost ({entry:.2f}). T2 & T3 Active!")
-                            save_daily_state(active_trade)
-
-                        elif current_tick <= sl:
-                            if active_trade.get("highest_target", 0) >= 1:
-                                target_num = active_trade["highest_target"]
-                                booked_pnl = active_trade.get("locked_pnl", 0.0)
-                                active_trade["status"] = f"Target {target_num} Achieved"
-                                active_trade["exit_price"] = active_trade[f"t{target_num}"]
-                                active_trade["pnl"] = booked_pnl
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [BUY]</b>\nPrice: {current_tick:.2f}\nExited with profit booked at Target {target_num} (+{booked_pnl:.2f} Pts).")
-                            else:
-                                pnl = sl - entry
-                                active_trade["exit_price"] = sl
-                                active_trade["pnl"] = pnl
-                                active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [BUY]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
-                                sl_cooldown_until = now + timedelta(minutes=3)
-                                last_sl_side = "BUY"
-
-                            record_trade_to_ledger(active_trade)
-                            active_trade = None
-                            save_daily_state(None)
-
-                    elif side == "SELL":
-                        if current_tick <= t3:
-                            pnl = entry - t3
-                            active_trade["highest_target"] = 3
-                            active_trade["status"] = "Target 3 Achieved"
-                            active_trade["exit_price"] = t3
-                            active_trade["pnl"] = pnl
-                            record_trade_to_ledger(active_trade)
-                            send_telegram_alert(f"🎯 <b>TARGET 3 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nTrade closed in full profit.")
-                            active_trade = None
-                            save_daily_state(None)
-
-                        elif current_tick <= t2 and active_trade.get("highest_target", 0) < 2:
-                            pnl = entry - t2
-                            active_trade["highest_target"] = 2
-                            active_trade["sl"] = t1
-                            active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 2 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed to Target 1 ({t1:.2f}).")
-                            save_daily_state(active_trade)
-
-                        elif current_tick <= t1 and active_trade.get("highest_target", 0) < 1:
-                            pnl = entry - t1
-                            active_trade["highest_target"] = 1
-                            active_trade["sl"] = entry
-                            active_trade["locked_pnl"] = pnl
-                            send_telegram_alert(f"🎯 <b>TARGET 1 ACHIEVED! [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: +{pnl:.2f} Pts\nSL trailed safely to Cost ({entry:.2f}). T2 & T3 Active!")
-                            save_daily_state(active_trade)
-
-                        elif current_tick >= sl:
-                            if active_trade.get("highest_target", 0) >= 1:
-                                target_num = active_trade["highest_target"]
-                                booked_pnl = active_trade.get("locked_pnl", 0.0)
-                                active_trade["status"] = f"Target {target_num} Achieved"
-                                active_trade["exit_price"] = active_trade[f"t{target_num}"]
-                                active_trade["pnl"] = booked_pnl
-                                send_telegram_alert(f"🏁 <b>TRAILING STOP TRIGGERED [SELL]</b>\nPrice: {current_tick:.2f}\nExited with profit booked at Target {target_num} (+{booked_pnl:.2f} Pts).")
-                            else:
-                                pnl = entry - sl
-                                active_trade["exit_price"] = sl
-                                active_trade["pnl"] = pnl
-                                active_trade["status"] = "Stop Loss Hit"
-                                send_telegram_alert(f"🛑 <b>STOP LOSS HIT [SELL]</b>\nPrice: {current_tick:.2f}\nPoints: {pnl:.2f} Pts\nExited position.")
-                                sl_cooldown_until = now + timedelta(minutes=3)
-                                last_sl_side = "SELL"
-
-                            record_trade_to_ledger(active_trade)
-                            active_trade = None
-                            save_daily_state(None)
-
-                # SCENARIO B: SCAN FOR NEW TRADES
-                trigger = None
-                trade_type = ""
-                risk_pts = dynamic_risk
-
-                if prev_tick < levels["H4"] and current_tick >= levels["H4"]:
-                    trigger = "BUY"
-                    trade_type = "Breakout Spike (Above R4)"
-                elif prev_tick <= levels["L3"] and current_tick > levels["L3"]:
-                    trigger = "BUY"
-                    trade_type = "Support Bounce (Reversal from S3)"
-                elif prev_tick > levels["L4"] and current_tick <= levels["L4"]:
-                    trigger = "SELL"
-                    trade_type = "Breakdown Spike (Below S4)"
-                elif prev_tick >= levels["H3"] and current_tick < levels["H3"]:
-                    trigger = "SELL"
-                    trade_type = "Resistance Rejection (Reversal from R3)"
-
-                if trigger and sl_cooldown_until and now < sl_cooldown_until and trigger == last_sl_side:
-                    trigger = None
-
-                if trigger and active_trade is not None:
-                    if active_trade.get("highest_target", 0) >= 1 and active_trade["side"] != trigger:
-                        target_num = active_trade["highest_target"]
-                        booked_pnl = active_trade.get("locked_pnl", 0.0)
-                        active_trade["status"] = f"Target {target_num} Achieved (Switched)"
-                        active_trade["exit_price"] = active_trade[f"t{target_num}"]
-                        active_trade["pnl"] = booked_pnl
-                        record_trade_to_ledger(active_trade)
-                        send_telegram_alert(
-                            f"🔄 <b>POSITION SWITCHED TO {trigger}!</b>\n"
-                            f"Old {active_trade['side']} position safely closed with Target {target_num} profit (+{booked_pnl:.2f} Pts)."
-                        )
-                        active_trade = None
-                        save_daily_state(None)
-                    else:
-                        trigger = None
-
-                if trigger and active_trade is None:
-                    entry = current_tick
-                    entry_time_display = now.strftime('%I:%M:%S %p')
-                    if trigger == "BUY":
-                        sl = round(entry - risk_pts, 2)
-                        t1 = round(entry + risk_pts, 2)
-                        t2 = round(entry + (risk_pts * 2.0), 2)
-                        t3 = round(entry + (risk_pts * 3.0), 2)
-                    else:
-                        sl = round(entry + risk_pts, 2)
-                        t1 = round(entry - risk_pts, 2)
-                        t2 = round(entry - (risk_pts * 2.0), 2)
-                        t3 = round(entry - (risk_pts * 3.0), 2)
-
-                    active_trade = {
-                        "date": today_date_str,
-                        "index": "NIFTY 50",
-                        "side": trigger,
-                        "type": trade_type,
-                        "entry": entry,
-                        "sl": sl,
-                        "initial_sl": sl,
-                        "t1": t1,
-                        "t2": t2,
-                        "t3": t3,
-                        "highest_target": 0,
-                        "locked_pnl": 0.0,
-                        "time": entry_time_display
-                    }
-                    save_daily_state(active_trade)
-
-                    msg = (
-                        f"⚡ <b>SAS LEVEL TRACKER SIGNAL</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 <b>Index:</b> NIFTY 50\n"
-                        f"🎯 <b>Action:</b> {trigger}\n"
-                        f"⏰ <b>Entry Time:</b> {entry_time_display} IST\n"
-                        f"🔹 <b>Entry:</b> {entry:.2f}\n"
-                        f"🛑 <b>Stop Loss:</b> {sl:.2f}\n"
-                        f"🎯 <b>Target 1:</b> {t1:.2f}\n"
-                        f"🎯 <b>Target 2:</b> {t2:.2f}\n"
-                        f"🎯 <b>Target 3:</b> {t3:.2f}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━"
-                    )
-                    send_telegram_alert(msg)
-
-                if now.minute == 0 and now.hour != last_heartbeat_hour and (9 <= now.hour <= 15):
-                    last_heartbeat_hour = now.hour
-                    diff = current_tick - close
-                    pct = (diff / close) * 100 if close != 0 else 0.0
-                    hb_msg = (
-                        f"💓 <b>HOURLY STATUS ALERT</b>\n"
-                        f"⏰ Time: {now.strftime('%I:%M:00 %p')} IST\n\n"
-                        f"• NIFTY 50: {current_tick:.2f} ({diff:+.2f} | {pct:+.2f}%)\n"
-                    )
-                    send_telegram_alert(hb_msg)
-
-                prev_tick = current_tick
-
-        # Auto Square Off at 03:25 PM
-        if current_time >= dtime(15, 25) and active_trade is not None:
-            entry = active_trade["entry"]
-            last_prc = current_tick if current_tick else entry
-            pnl = (last_prc - entry) if active_trade["side"] == "BUY" else (entry - last_prc)
-            active_trade["status"] = "EOD Auto-Exit"
-            active_trade["exit_price"] = last_prc
-            active_trade["pnl"] = pnl
-            record_trade_to_ledger(active_trade)
-            active_trade = None
-            save_daily_state(None)
-            send_telegram_alert(f"🔔 <b>MARKET CLOSING (03:25 PM):</b> Open position closed ({pnl:+.2f} Pts).")
-
-        # 03:40 PM - DAILY PERFORMANCE & MONTHLY EXPIRY PDF DISPATCH
-        if current_time >= dtime(15, 40):
-            ledger = load_expiry_ledger()
-            today_trades = [t for t in ledger if t.get("date") == today_date_str]
-            today_pnl = sum(t.get("pnl", 0.0) for t in today_trades)
-            
-            # 1. DAILY REPORT & PDF
-            daily_summary = (
-                f"📊 <b>DAILY PERFORMANCE SUMMARY (03:40 PM)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 <b>Date:</b> {today_str_display}\n"
-                f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
-                f"• Today Trades: {len(today_trades)}\n"
-                f"📈 <b>Day Net Points:</b> {today_pnl:+.2f} Pts\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Dispatching Daily Analytical PDF Report...</i>"
-            )
-            send_telegram_alert(daily_summary)
-
-            daily_pdf = f"Daily_Report_{today_str_display}.pdf"
-            try:
-                generate_pdf_report(daily_pdf, "DAILY PERFORMANCE REPORT", today_str_display, today_trades, today_pnl)
-                send_telegram_document(daily_pdf, caption=f"📄 Daily Performance Report ({today_str_display}) | Net: {today_pnl:+.2f} Pts")
-                send_email_with_pdf(daily_pdf, f"Daily Performance Report - {today_str_display}", daily_summary)
-            except Exception as e:
-                logger.error(f"Daily PDF Generation Error: {e}")
-
-            # 2. MONTHLY EXPIRY TO EXPIRY REPORT & PDF
-            if is_today_monthly_tuesday_expiry():
-                total_cycle_pnl = sum(t.get("pnl", 0.0) for t in ledger)
-                monthly_summary = (
-                    f"🏆 <b>MONTHLY EXPIRY CYCLE REPORT (03:40 PM)</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📅 <b>Expiry Date:</b> {today_str_display}\n"
-                    f"⚡ <b>Strategy:</b> SAS LEVEL TRACKER\n"
-                    f"• Total Month Crossovers: {len(ledger)}\n"
-                    f"📈 <b>Net Cycle Points:</b> {total_cycle_pnl:+.2f} Pts\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"<i>Dispatching Complete Expiry Ledger PDF...</i>"
-                )
-                send_telegram_alert(monthly_summary)
-
-                expiry_pdf = f"Monthly_Expiry_Report_{today_str_display}.pdf"
-                try:
-                    generate_pdf_report(expiry_pdf, "MONTHLY EXPIRY CYCLE REPORT", today_str_display, ledger, total_cycle_pnl)
-                    send_telegram_document(expiry_pdf, caption=f"📄 Monthly Expiry Report ({today_str_display}) | Final: {total_cycle_pnl:+.2f} Pts")
-                    send_email_with_pdf(expiry_pdf, f"Monthly Expiry Report - {today_str_display}", monthly_summary)
-                    clear_expiry_ledger()
-                except Exception as e:
-                    logger.error(f"Expiry PDF Generation Error: {e}")
-
-            send_telegram_alert("🛑 <b>MARKET CLOSED (03:40 PM):</b> SAS Level Tracker shutting down safely.")
-            break
-
-        time.sleep(1)
+        except Exception as e:
+            print(f"Engine Loop Error: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()
