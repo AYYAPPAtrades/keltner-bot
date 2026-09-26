@@ -135,22 +135,14 @@ def send_telegram(text: str, target="admin"):
         except Exception as e:
             print(f"Telegram Channel Error: {e}")
 
-# ================= STATE & TRADE BACKUP =================
 def load_state():
-    def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 return json.load(f)
         except Exception:
             pass
-    return {
-        "active_trade": None,
-        "support_sent_today": False,
-        "daily_report_sent_today": False,
-        "monthly_report_sent_today": False,
-        "startup_alert_sent": False
-    }
+    return {"active_trade": None, "support_sent_today": False, "daily_report_sent_today": False, "monthly_report_sent_today": False, "startup_alert_sent": False}
 
 
 def log_trade(trade_record):
