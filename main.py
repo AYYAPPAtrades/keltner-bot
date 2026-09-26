@@ -186,7 +186,22 @@ def generate_pdf_report(filename, title, subtitle, trades):
             table_data.append([
                 t.get("date", "-"),
                 t["action"],
-                f"₹{t['entry']}",[span_14](start_span)[span_14](end_span)
+                    if not trades:
+        table_data.append(["-", "No Trades", "-", "-", "-", "-", "-"])
+    else:
+        for t in trades:
+            pts = round(t["pnl_points"], 2)
+            total_points += pts
+            table_data.append([
+                t.get("date", "-"),
+                t["action"],
+                f"₹{t['entry']}",
+                f"₹{t['exit']}",
+                f"{'+' if pts > 0 else ''}{pts}",
+                t["reason"],
+                t["exit_time"]
+            ])
+
                 f"₹{t['exit']}",[span_15](start_span)[span_15](end_span)
                 f"{'+' if pts > 0 else ''}{pts}",[span_16](start_span)[span_16](end_span)
                 t["reason"],
