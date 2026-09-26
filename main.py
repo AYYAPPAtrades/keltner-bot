@@ -152,7 +152,6 @@ def load_state():
         "startup_alert_sent": False
     }
 
-        json.dump(state, f, indent=4)
 
 def log_trade(trade_record):
     trades = []
