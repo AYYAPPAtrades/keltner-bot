@@ -147,16 +147,20 @@ def load_state():
         except Exception:
             pass
     return {
+        def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
         "active_trade": None,
-        "support_sent_today": False,[span_13](start_span)[span_13](end_span)
-        "daily_report_sent_today": False,[span_14](start_span)[span_14](end_span)
-        "monthly_report_sent_today": False,[span_15](start_span)[span_15](end_span)
-        "startup_alert_sent": False[span_16](start_span)[span_16](end_span)
+        "support_sent_today": False,
+        "daily_report_sent_today": False,
+        "monthly_report_sent_today": False,
+        "startup_alert_sent": False
     }
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=4)
 
 def log_trade(trade_record):
     """എല്ലാ ട്രേഡുകളും Expiry-to-Expiry സൈക്കിളിലേക്ക് കൃത്യമായി സേവ് ചെയ്യുന്നു"""
