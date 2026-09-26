@@ -1,0 +1,54 @@
+name: SAS LEVEL TRACKER Service
+
+on:
+  schedule:
+    # തിങ്കൾ മുതൽ വെള്ളി വരെ രാവിലെ 08:58 AM IST (UTC 03:28 AM)-ന് ബോട്ട് റൺ ആകും
+    - cron: '28 3 * * 1-5'
+  workflow_dispatch: # നിങ്ങൾക്ക് സ്വയം മാനുവലായി റൺ ചെയ്യാൻ
+
+jobs:
+  run-tracker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420 # 7 മണിക്കൂർ വരെ തുടർച്ചയായി പ്രവർത്തിക്കും (3:45 PM വരെ)
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # റീസ്റ്റാർട്ട് ആയാൽ പഴയ ട്രേഡ് ഡാറ്റ റിക്കവർ ചെയ്യാൻ Cache ഉപയോഗിക്കുന്നു
+      - name: Restore Trade State Backup
+        uses: actions/cache@v4
+        with:
+          path: |
+            sas_bot_state.json
+            sas_expiry_cycle_trades.json
+          key: sas-state-${{ github.run_id }}
+          restore-keys: |
+            sas-state-
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Angel One Live Tracker Engine
+        env:
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+        run: |
+          python sas_level_tracker_full.py
+
+      # വിപണി ക്ലോസ് ചെയ്ത ശേഷം പുതിയ ട്രേഡ് ബാക്കപ്പുകൾ സേവ് ചെയ്യുന്നു
+      - name: Save Updated Backup State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            sas_bot_state.json
+            sas_expiry_cycle_trades.json
+          key: sas-state-${{ github.run_id }}
