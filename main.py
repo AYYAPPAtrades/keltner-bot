@@ -137,6 +137,7 @@ def send_telegram(text: str, target="admin"):
 
 # ================= STATE & TRADE BACKUP =================
 def load_state():
+    def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -145,14 +146,12 @@ def load_state():
             pass
     return {
         "active_trade": None,
-        "support_sent_today": False,[span_8](start_span)[span_8](end_span)
-        "daily_report_sent_today": False,[span_9](start_span)[span_9](end_span)
-        "monthly_report_sent_today": False,[span_10](start_span)[span_10](end_span)
-        "startup_alert_sent": False[span_11](start_span)[span_11](end_span)
+        "support_sent_today": False,
+        "daily_report_sent_today": False,
+        "monthly_report_sent_today": False,
+        "startup_alert_sent": False
     }
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
 def log_trade(trade_record):
