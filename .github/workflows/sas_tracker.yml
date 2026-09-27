@@ -1,1 +1,51 @@
+name: SAS LEVEL TRACKER Service
 
+on:
+  schedule:
+    - cron: '28 3 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-tracker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore Trade State Backup
+        uses: actions/cache@v4
+        with:
+          path: |
+            sas_bot_state.json
+            sas_expiry_cycle_trades.json
+          key: sas-state-${{ github.run_id }}
+          restore-keys: |
+            sas-state-
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Angel One Live Tracker Engine
+        env:
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+        run: |
+          python main.py
+
+      - name: Save Updated Backup State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            sas_bot_state.json
+            sas_expiry_cycle_trades.json
+          key: sas-state-${{ github.run_id }}
