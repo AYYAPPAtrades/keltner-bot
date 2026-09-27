@@ -24,28 +24,37 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# ================= 1. CREDENTIALS & CONSTANTS (SECURE) =================
-ANGEL_API_KEY = os.getenv("ANGEL_API_KEY", "Qm1mu8xU")
-ANGEL_TOTP_KEY = os.getenv("ANGEL_TOTP_KEY", "XXWTRAQWY6B4XGDBHD2YAJRVJE")
+# ================= 1. CREDENTIALS & CONSTANTS =================
+ANGEL_API_KEY = "Qm1mu8xU"
+ANGEL_TOTP_KEY = "XXWTRAQWY6B4XGDBHD2YAJRVJE"
 ANGEL_CLIENT_CODE = os.getenv("ANGEL_CLIENT_CODE", "AACM196001")
 ANGEL_PIN = os.getenv("ANGEL_PIN", "4099")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "6789591588")
-CHANNEL_CHAT_ID = os.getenv("CHANNEL_CHAT_ID", "-100XXXXXXXXXX")
+BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8"
+ADMIN_CHAT_ID = "6789591588"
+CHANNEL_CHAT_ID = "-100XXXXXXXXXX"
 
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "shinos99@gmail.com")
-GMAIL_APP_PASS = os.getenv("GMAIL_APP_PASS", "wgms etgl eklv cdja")
+ADMIN_EMAIL = "shinos99@gmail.com"
+GMAIL_APP_PASS = "wgms etgl eklv cdja"
 
 STATE_FILE = "sas_bot_state.json"
 HISTORY_FILE = "sas_expiry_cycle_trades.json"
 IST = pytz.timezone("Asia/Kolkata")
 
-NSE_HOLIDAYS_2026 = [
-    "2026-01-26", "2026-03-03", "2026-03-26", "2026-04-03", 
-    "2026-04-14", "2026-05-01", "2026-08-15", "2026-10-02", 
-    "2026-10-20", "2026-11-08", "2026-12-25"
-]
+# NSE Holidays with Reason
+NSE_HOLIDAYS_2026 = {
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Ram Navami",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day / Labour Day",
+    "2026-08-15": "Independence Day",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-08": "Diwali Balipratipada",
+    "2026-12-25": "Christmas"
+}
 
 smart_api = None
 
@@ -159,7 +168,8 @@ def load_state():
         "support_sent_today": False,
         "daily_report_sent_today": False,
         "monthly_report_sent_today": False,
-        "startup_alert_sent": False
+        "startup_alert_sent": False,
+        "last_hourly_alert_hour": None
     }
 
 def save_state(state):
@@ -302,7 +312,45 @@ def process_market_cycle(state):
             state["support_sent_today"] = True
             save_state(state)
 
-    # 3. 09:15 AM to 03:00 PM - Signal Processing
+    # 3. HOURLY STATUS ALERT (ADMIN ONLY)
+    if 10 <= now_ist.hour <= 15:
+        if state.get("last_hourly_alert_hour") != now_ist.hour:
+            c_spot = round(float(df.iloc[-1]["Close"]), 2)
+            c_high_day = round(float(df["High"].max()), 2)
+            c_low_day = round(float(df["Low"].min()), 2)
+
+            active = state.get("active_trade")
+            if active:
+                trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['sl'])})"
+            else:
+                trade_info = "None (Waiting for Setup)"
+
+            trades_cnt = 0
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, "r") as f:
+                        h_trades = json.load(f)
+                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
+                except Exception:
+                    pass
+
+            df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+            cam_levels = calculate_camarilla_levels(df_daily)
+
+            hourly_msg = (
+                f"⏱️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
+                f"🟢 *Bot Health:* Active & Monitoring\n"
+                f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
+                f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
+                f"🔄 *Active Trade:* {trade_info}\n"
+                f"📑 *Today's Trades Closed:* {trades_cnt}\n"
+                f"🎯 *Key Levels:* H4: Rs.{cam_levels['H4']} | L4: Rs.{cam_levels['L4']}"
+            )
+            send_telegram(hourly_msg, target="admin")
+            state["last_hourly_alert_hour"] = now_ist.hour
+            save_state(state)
+
+    # 4. 09:15 AM to 03:00 PM - Signal Processing
     if dtime(9, 15) <= curr_time <= dtime(15, 0):
         high_low = df["High"] - df["Low"]
         high_close = np.abs(df["High"] - df["Close"].shift())
@@ -331,7 +379,7 @@ def process_market_cycle(state):
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):
                     active["t1_hit"] = True
-                    active["sl_active"] = False  # Remove SL completely after T1
+                    active["sl_active"] = False
                     msg = (
                         f"🎯 *TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
                         f"• Trade Secured: **Stop Loss Removed Completely**.\n"
@@ -413,7 +461,7 @@ def process_market_cycle(state):
                 })
                 trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
-    # 4. 03:20 PM - Intraday Auto Square-Off
+    # 5. 03:20 PM - Intraday Auto Square-Off
     if dtime(15, 20) <= curr_time < dtime(15, 30):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
@@ -429,7 +477,7 @@ def process_market_cycle(state):
             state["active_trade"] = None
             save_state(state)
 
-    # 5. 03:45 PM - Daily Report
+    # 6. 03:45 PM - Daily Report
     if dtime(15, 45) <= curr_time < dtime(15, 55):
         if not state.get("daily_report_sent_today"):
             all_trades = []
@@ -465,7 +513,7 @@ def process_market_cycle(state):
             state["daily_report_sent_today"] = True
             save_state(state)
 
-    # 6. 03:45 PM - Monthly Expiry Report
+    # 7. 03:45 PM - Monthly Expiry Report
     if dtime(15, 45) <= curr_time < dtime(15, 55):
         if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
             all_cycle_trades = []
@@ -547,7 +595,37 @@ def trigger_entry(action, price, atr, now_ist, state):
 def main():
     print("Starting SAS LEVEL TRACKER Service...")
     
-    # Bot starts -> Alert Admin immediately
+    now_ist = datetime.now(IST)
+    today_str = now_ist.strftime("%Y-%m-%d")
+    weekday = now_ist.weekday()
+
+    # 1. Weekend Check (Saturday = 5, Sunday = 6)
+    if weekday >= 5:
+        day_name = "Saturday" if weekday == 5 else "Sunday"
+        send_telegram(
+            f"🏖️ *WEEKEND PAUSE ({day_name})*\n\n"
+            f"Market is closed today. Live scanner is inactive.\n"
+            f"Workflow stopped immediately to save minutes.",
+            target="admin"
+        )
+        print("Weekend detected. Workflow exited.")
+        sys.exit(0)
+
+    # 2. NSE Holiday Check (Morning 8:58 AM - 9:00 AM Alert with Reason)
+    if today_str in NSE_HOLIDAYS_2026:
+        reason = NSE_HOLIDAYS_2026[today_str]
+        holiday_msg = (
+            f"🏖️ *MARKET HOLIDAY ALERT (NSE/BSE)*\n\n"
+            f"• *Date:* {today_str}\n"
+            f"• *Occasion:* *{reason}*\n"
+            f"• *Status:* Market is officially closed today.\n"
+            f"Live scanner and alerts are paused. Workflow stopped to preserve free minutes."
+        )
+        send_telegram(holiday_msg, target="all")
+        print(f"Holiday today: {reason}. Notification dispatched. Exiting.")
+        sys.exit(0)
+
+    # Active Trading Day
     send_telegram("🚀 *BOT RUNNING:* System triggered. Execution active.", target="admin")
 
     state = load_state()
@@ -557,31 +635,26 @@ def main():
         try:
             now_ist = datetime.now(IST)
             curr_time = now_ist.time()
-            weekday = now_ist.weekday()
 
-            if weekday >= 5:
-                time.sleep(3600)
-                continue
+            # 3:50 PM കഴിഞ്ഞാൽ റിപ്പോർട്ട് പൂർത്തിയാക്കി തനിയെ ക്ലോസ് ആകും
+            if curr_time > dtime(15, 50):
+                print("Market closed & Daily reports sent. Shutting down bot.")
+                send_telegram("🛑 *SYSTEM SHUTDOWN (3:50 PM):* Daily session completed. Bot stopped to save minutes.", target="admin")
+                break
 
-            if curr_time < dtime(8, 55):
-                state["support_sent_today"] = False
-                state["daily_report_sent_today"] = False
-                state["monthly_report_sent_today"] = False
-                state["startup_alert_sent"] = False
-                save_state(state)
-                time.sleep(60)
-                continue
-
-            # Continuous execution during market hours (9:00 AM to 3:55 PM IST)
-            if dtime(9, 0) <= curr_time <= dtime(15, 55):
+            # 8:58 AM - 3:50 PM Live Scanner Loop
+            if dtime(8, 58) <= curr_time <= dtime(15, 50):
                 process_market_cycle(state)
                 time.sleep(5)
             else:
-                time.sleep(60)
+                time.sleep(30)
 
         except Exception as e:
             print(f"Engine Loop Error: {e}")
             time.sleep(10)
+
+    print("Workflow completed successfully.")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
