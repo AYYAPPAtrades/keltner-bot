@@ -41,7 +41,7 @@ jobs:
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
         run: |
-          python sas_level_tracker_full.py
+          python test_angel.py
 
       # വിപണി ക്ലോസ് ചെയ്ത ശേഷം പുതിയ ട്രേഡ് ബാക്കപ്പുകൾ സേവ് ചെയ്യുന്നു
       - name: Save Updated Backup State
