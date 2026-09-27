@@ -32,7 +32,7 @@ ANGEL_PIN = os.getenv("ANGEL_PIN", "YOUR_4_DIGIT_PIN")
 
 BOT_TOKEN = "8804327561:AAECrvtUOMCYB80L0ZchoKy_YDpwJ52zQA8"
 ADMIN_CHAT_ID = "6789591588"
-CHANNEL_CHAT_ID = "-100XXXXXXXXXX"     # ടെലിഗ്രാം ചാനൽ ID ഇവിടെ നൽകുക
+CHANNEL_CHAT_ID = "-100XXXXXXXXXX"     # Optional Telegram Channel ID
 
 ADMIN_EMAIL = "shinos99@gmail.com"
 GMAIL_APP_PASS = "wgms etgl eklv cdja"
@@ -41,7 +41,7 @@ STATE_FILE = "sas_bot_state.json"
 HISTORY_FILE = "sas_expiry_cycle_trades.json"
 IST = pytz.timezone("Asia/Kolkata")
 
-# NSE ട്രേഡിംഗ് ഹോളിഡേ ലിസ്റ്റ് (അവധി ദിവസങ്ങളിൽ എക്സ്പയറി തൊട്ടുമുമ്പത്തെ ട്രേഡിംഗ് ദിനമാകും)
+# NSE Trading Holidays List
 NSE_HOLIDAYS_2026 = [
     "2026-01-26", "2026-03-03", "2026-03-26", "2026-04-03", 
     "2026-04-14", "2026-05-01", "2026-08-15", "2026-10-02", 
@@ -55,12 +55,12 @@ def get_monthly_expiry_date(year, month):
     last_day = calendar.monthrange(year, month)[1]
     d = date(year, month, last_day)
 
-    # മാസത്തിലെ അവസാന വ്യാഴാഴ്ച (Thursday = 3)
+    # Monthly Expiry (Thursday = 3)
     target_weekday = 3 
     while d.weekday() != target_weekday:
         d -= timedelta(days=1)
 
-    # അവധി ദിവസമാണെങ്കിൽ തൊട്ടുമുമ്പത്തെ ട്രേഡിംഗ് ദിനം എടുക്കുന്നു
+    # Shift to previous trading day if holiday or weekend
     while d.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026 or d.weekday() >= 5:
         d -= timedelta(days=1)
 
@@ -122,13 +122,13 @@ def send_telegram(text: str, target="admin"):
     full_text = f"{header}\n{text}"
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # 1. അഡ്മിന് മാത്രം അയക്കുന്നു
+    # 1. Send to Admin
     try:
         requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": full_text, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
         print(f"Telegram Admin Error: {e}")
 
-    # 2. ചാനൽ ജോയിൻ ചെയ്തവർക്ക് അയക്കുന്നു
+    # 2. Send to Channel / Subscribers
     if target == "all" and CHANNEL_CHAT_ID and not CHANNEL_CHAT_ID.startswith("-100XX"):
         try:
             requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": full_text, "parse_mode": "Markdown"}, timeout=10)
@@ -196,8 +196,8 @@ def generate_pdf_report(filename, title, subtitle, trades):
             table_data.append([
                 t.get("date", "-"),
                 t["action"],
-                f"₹{t['entry']}",
-                f"₹{t['exit']}",
+                f"Rs.{t['entry']}",
+                f"Rs.{t['exit']}",
                 f"{'+' if pts > 0 else ''}{pts}",
                 t["reason"],
                 t["exit_time"]
@@ -263,10 +263,10 @@ def process_market_cycle(state):
     curr_time = now_ist.time()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    # 1. 09:00 AM - Bot Auto-run Alert (Admin Only)
+    # 1. 09:00 AM - Daily Auto-Run Scheduled Alert (Admin Only)
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *SYSTEM LIVE:* Angel One API Active.\nZero-delay continuous scan started at 9:00 AM.", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -280,12 +280,12 @@ def process_market_cycle(state):
             df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
             levels = calculate_camarilla_levels(df_daily)
             msg = (
-                f"📊 *NIFTY INTRADAY LEVELS (Angel One Live)*\n\n"
-                f"• *Resistance 2 (Breakout H4):* ₹{levels['H4']}\n"
-                f"• *Resistance 1 (Cam H3):* ₹{levels['H3']}\n"
-                f"• *Pivot Point (PP):* ₹{levels['PP']}\n"
-                f"• *Support 1 (Cam L3):* ₹{levels['L3']}\n"
-                f"• *Support 2 (Breakdown L4):* ₹{levels['L4']}"
+                f"📊 *NIFTY INTRADAY LEVELS (Live Feed)*\n\n"
+                f"• *Resistance 2 (Breakout H4):* Rs.{levels['H4']}\n"
+                f"• *Resistance 1 (Cam H3):* Rs.{levels['H3']}\n"
+                f"• *Pivot Point (PP):* Rs.{levels['PP']}\n"
+                f"• *Support 1 (Cam L3):* Rs.{levels['L3']}\n"
+                f"• *Support 2 (Breakdown L4):* Rs.{levels['L4']}"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -314,17 +314,17 @@ def process_market_cycle(state):
         levels = calculate_camarilla_levels(df_daily)
         active = state.get("active_trade")
 
-        # നിലവിലുള്ള ട്രേഡ് പരിശോധിക്കുന്നു
+        # Active Trade Management
         if active is not None:
             # T1 Achieved
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):
                     active["t1_hit"] = True
-                    active["sl_active"] = False  # T1 അടിച്ച ശേഷം SL പൂർണ്ണമായി ഒഴിവാക്കുന്നു
+                    active["sl_active"] = False  # Remove SL completely after T1
                     msg = (
-                        f"🎯 *TARGET 1 (T1) ACHIEVED! [₹{active['t1']}]*\n\n"
-                        f"• Trade secured: **Stop Loss Removed Completely**.\n"
-                        f"• Now trailing for Target 2 (₹{active['t2']}) & Target 3 (₹{active['t3']})."
+                        f"🎯 *TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
+                        f"• Trade Secured: **Stop Loss Removed Completely**.\n"
+                        f"• Trailing for Target 2 (Rs.{active['t2']}) & Target 3 (Rs.{active['t3']})."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
@@ -333,7 +333,7 @@ def process_market_cycle(state):
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t2"]) or (active["action"] == "SELL" and c_low <= active["t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *TARGET 2 (T2) ACHIEVED! [₹{active['t2']}]*\nTrail stops to lock profit.", target="all")
+                    send_telegram(f"🚀 *TARGET 2 (T2) ACHIEVED! [Rs.{active['t2']}]*\nTrail stops to lock profit.", target="all")
                     save_state(state)
 
             # T3 Hit (Complete Exit)
@@ -342,7 +342,7 @@ def process_market_cycle(state):
                     active["t3_hit"] = True
                     exit_price = active["t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT! [₹{exit_price}]*\nExit full position.", target="all")
+                    send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT! [Rs.{exit_price}]*\nExit full position.", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -354,13 +354,13 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-            # SL Check (T1-ന് മുൻപ് മാത്രം)
+            # SL Check (Only prior to T1)
             if active["sl_active"]:
                 sl_hit = (active["action"] == "BUY" and c_low <= active["sl"]) or (active["action"] == "SELL" and c_high >= active["sl"])
                 if sl_hit:
                     exit_price = active["sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *STOP LOSS HIT! [₹{exit_price}]*\nExit trade.", target="all")
+                    send_telegram(f"🛑 *STOP LOSS HIT! [Rs.{exit_price}]*\nExit trade.", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -371,7 +371,7 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # പുതിയ സിഗ്നൽ സ്കാനിംഗ്
+        # New Signal Scan
         new_signal = None
         if float(prior["Close"]) <= levels["H4"] and c_close > levels["H4"] and c_ema9 > c_ema21:
             new_signal = "BUY"
@@ -382,7 +382,6 @@ def process_market_cycle(state):
             if state["active_trade"] is None:
                 trigger_entry(new_signal, c_close, c_atr, now_ist, state)
             elif state["active_trade"]["t1_hit"]:
-                # T1 അടിച്ച ശേഷം പുതിയ സിഗ്നൽ വന്നാൽ Exit Previous Trade Alert നൽകുന്നു
                 prev_action = state["active_trade"]["action"]
                 prev_entry = state["active_trade"]["entry"]
                 exit_price = round(c_close, 2)
@@ -391,7 +390,7 @@ def process_market_cycle(state):
                 send_telegram(
                     f"⚠️ *EXIT PREVIOUS TRADE ALERT*\n\n"
                     f"New market momentum formed.\n"
-                    f"• *Exit Current Trade At:* ₹{exit_price}\n"
+                    f"• *Exit Current Trade At:* Rs.{exit_price}\n"
                     f"• *Strict Gain Locked:* {'+' if pnl > 0 else ''}{round(pnl, 2)} Pts",
                     target="all"
                 )
@@ -403,13 +402,13 @@ def process_market_cycle(state):
                 })
                 trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
-    # 4. 03:20 PM - ഇൻട്രാഡേ സ്ക്വയർ-ഓഫ്
+    # 4. 03:20 PM - Intraday Auto Square-Off
     if dtime(15, 20) <= curr_time < dtime(15, 30):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-            send_telegram(f"⏰ *INTRADAY AUTO SQUARE-OFF (3:20 PM)*\nExiting at ₹{exit_price}.", target="all")
+            send_telegram(f"⏰ *INTRADAY AUTO SQUARE-OFF (3:20 PM)*\nExiting at Rs.{exit_price}.", target="all")
             log_trade({
                 "date": today_str, "action": active["action"],
                 "entry": active["entry"], "exit": exit_price,
@@ -419,7 +418,7 @@ def process_market_cycle(state):
             state["active_trade"] = None
             save_state(state)
 
-    # 5. 03:45 PM - എല്ലാ ദിവസവും ഡെയ്‌ലി റിപ്പോർട്ട് (Daily Report)
+    # 5. 03:45 PM - Daily Report (Sent Every Day)
     if dtime(15, 45) <= curr_time < dtime(15, 55):
         if not state.get("daily_report_sent_today"):
             all_trades = []
@@ -455,7 +454,7 @@ def process_market_cycle(state):
             state["daily_report_sent_today"] = True
             save_state(state)
 
-    # 6. 03:45 PM - MONTHLY EXPIRY DAY ആയാൽ മാത്രം പ്രത്യേക MONTHLY REPORT
+    # 6. 03:45 PM - Monthly Expiry Report (Only on Monthly Expiry Day)
     if dtime(15, 45) <= curr_time < dtime(15, 55):
         if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
             all_cycle_trades = []
@@ -516,11 +515,11 @@ def trigger_entry(action, price, atr, now_ist, state):
         f"⚡ *NEW INTRADAY SIGNAL (ANGEL ONE)*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
-        f"• *Entry Price:* ₹{entry}\n"
-        f"• *Target 1 (T1):* ₹{t1}\n"
-        f"• *Target 2 (T2):* ₹{t2}\n"
-        f"• *Target 3 (T3):* ₹{t3}\n"
-        f"• *Stop Loss (SL):* ₹{sl}\n"
+        f"• *Entry Price:* Rs.{entry}\n"
+        f"• *Target 1 (T1):* Rs.{t1}\n"
+        f"• *Target 2 (T2):* Rs.{t2}\n"
+        f"• *Target 3 (T3):* Rs.{t3}\n"
+        f"• *Stop Loss (SL):* Rs.{sl}\n"
         f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
     )
     send_telegram(msg, target="all")
@@ -536,11 +535,15 @@ def trigger_entry(action, price, atr, now_ist, state):
 # ================= MASTER LOOP =================
 def main():
     print("Starting SAS LEVEL TRACKER Service...")
-    init_angel_session()
+    
+    # Send instant startup confirmation to Admin whenever the bot runs
+    send_telegram("🚀 *BOT RUNNING:* System triggered. Execution active.", target="admin")
+
+    # Load backup state
     state = load_state()
 
-    # എപ്പോൾ ബോട്ട് റീസ്റ്റാർട്ട് ആയാലും അഡ്മിന് മാത്രം അറിയിപ്പ് അയക്കുന്നു
-    send_telegram("🔄 *SYSTEM RESTART:* Angel One Bot successfully recovered all trade states from local backup.", target="admin")
+    # Authenticate Angel One API
+    init_angel_session()
 
     while True:
         try:
@@ -561,10 +564,10 @@ def main():
                 time.sleep(60)
                 continue
 
-            # 9:00 AM മുതൽ 3:55 PM വരെ റൺ ചെയ്യുന്നു
+            # Run during intraday session (9:00 AM to 3:55 PM IST)
             if dtime(9, 0) <= curr_time <= dtime(15, 55):
                 process_market_cycle(state)
-                time.sleep(5)  # 5 സെക്കൻഡ് ഇടവിട്ടുള്ള കൃത്യമായ ലൈവ് ചെക്കിംഗ്
+                time.sleep(5)
             else:
                 time.sleep(60)
 
