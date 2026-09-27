@@ -159,7 +159,8 @@ def load_state():
         "support_sent_today": False,
         "daily_report_sent_today": False,
         "monthly_report_sent_today": False,
-        "startup_alert_sent": False
+        "startup_alert_sent": False,
+        "last_hourly_alert_hour": None
     }
 
 def save_state(state):
@@ -194,7 +195,6 @@ def generate_pdf_report(filename, title, subtitle, trades):
     elements.append(Paragraph(subtitle, styles["Normal"]))
     elements.append(Spacer(1, 15))
 
-    # Strict Entry to Exit Table
     table_data = [["Date", "Signal", "Entry Price", "Exit Price", "P&L (Points)", "Reason", "Time"]]
     total_points = 0.0
 
@@ -302,6 +302,47 @@ def process_market_cycle(state):
             state["support_sent_today"] = True
             save_state(state)
 
+    # ================= HOURLY STATUS ALERT (ADMIN ONLY) =================
+    # 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, 3:00 PM
+    if 10 <= now_ist.hour <= 15:
+        if state.get("last_hourly_alert_hour") != now_ist.hour:
+            c_spot = round(float(df.iloc[-1]["Close"]), 2)
+            c_high_day = round(float(df["High"].max()), 2)
+            c_low_day = round(float(df["Low"].min()), 2)
+            
+            # Active Trade Status
+            active = state.get("active_trade")
+            if active:
+                trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['sl'])})"
+            else:
+                trade_info = "None (Waiting for Setup)"
+
+            # Total trades today so far
+            trades_cnt = 0
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, "r") as f:
+                        h_trades = json.load(f)
+                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
+                except Exception:
+                    pass
+
+            df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+            cam_levels = calculate_camarilla_levels(df_daily)
+
+            hourly_msg = (
+                f"⏱️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
+                f"🟢 *Bot Health:* Active & Monitoring\n"
+                f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
+                f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
+                f"🔄 *Active Trade:* {trade_info}\n"
+                f"📑 *Today's Trades Closed:* {trades_cnt}\n"
+                f"🎯 *Key Levels:* H4: Rs.{cam_levels['H4']} | L4: Rs.{cam_levels['L4']}"
+            )
+            send_telegram(hourly_msg, target="admin")
+            state["last_hourly_alert_hour"] = now_ist.hour
+            save_state(state)
+
     # 3. 09:15 AM to 03:00 PM - Signal Processing
     if dtime(9, 15) <= curr_time <= dtime(15, 0):
         high_low = df["High"] - df["Low"]
@@ -331,7 +372,7 @@ def process_market_cycle(state):
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):
                     active["t1_hit"] = True
-                    active["sl_active"] = False  # Remove SL completely after T1
+                    active["sl_active"] = False
                     msg = (
                         f"🎯 *TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
                         f"• Trade Secured: **Stop Loss Removed Completely**.\n"
@@ -547,7 +588,6 @@ def trigger_entry(action, price, atr, now_ist, state):
 def main():
     print("Starting SAS LEVEL TRACKER Service...")
     
-    # Bot starts -> Alert Admin immediately
     send_telegram("🚀 *BOT RUNNING:* System triggered. Execution active.", target="admin")
 
     state = load_state()
@@ -568,6 +608,7 @@ def main():
                 state["daily_report_sent_today"] = False
                 state["monthly_report_sent_today"] = False
                 state["startup_alert_sent"] = False
+                state["last_hourly_alert_hour"] = None
                 save_state(state)
                 time.sleep(60)
                 continue
