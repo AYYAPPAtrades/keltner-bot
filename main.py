@@ -105,7 +105,7 @@ def get_angel_nifty_candle_data():
         historic_param = {
             "exchange": "NSE",
             "symboltoken": "99926000",
-            "interval": "FIVE_MINUTE",
+            "interval": "THREE_MINUTE",
             "fromdate": from_date,
             "todate": to_date
         }
@@ -286,7 +286,7 @@ def process_market_cycle(state):
     # 1. 09:00 AM - Market Session Start Alert (Admin Only)
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active.", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -301,11 +301,11 @@ def process_market_cycle(state):
             levels = calculate_camarilla_levels(df_daily)
             msg = (
                 f"📊 *NIFTY INTRADAY LEVELS (Live Feed)*\n\n"
-                f"• *Resistance 2 (Breakout H4):* Rs.{levels['H4']}\n"
-                f"• *Resistance 1 (Cam H3):* Rs.{levels['H3']}\n"
+                f"• *Resistance 2 (H4):* Rs.{levels['H4']}\n"
+                f"• *Resistance 1 (H3):* Rs.{levels['H3']}\n"
                 f"• *Pivot Point (PP):* Rs.{levels['PP']}\n"
-                f"• *Support 1 (Cam L3):* Rs.{levels['L3']}\n"
-                f"• *Support 2 (Breakdown L4):* Rs.{levels['L4']}"
+                f"• *Support 1 (L3):* Rs.{levels['L3']}\n"
+                f"• *Support 2 (L4):* Rs.{levels['L4']}"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -338,12 +338,12 @@ def process_market_cycle(state):
 
             hourly_msg = (
                 f"⏱️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active & Monitoring\n"
+                f"🟢 *Bot Health:* Active (3-Min Frame)\n"
                 f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
                 f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Trades Closed:* {trades_cnt}\n"
-                f"🎯 *Key Levels:* H4: Rs.{cam_levels['H4']} | L4: Rs.{cam_levels['L4']}"
+                f"🎯 *Key Levels:* H3: Rs.{cam_levels['H3']} | L3: Rs.{cam_levels['L3']}"
             )
             send_telegram(hourly_msg, target="admin")
             state["last_hourly_alert_hour"] = now_ist.hour
@@ -429,11 +429,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # New Signal Scan (Only takes new signal if there is NO active trade)
+        # New Signal Scan: Using H3 and L3 levels for early momentum signals with EMA filter
         new_signal = None
-        if float(prior["Close"]) <= levels["H4"] and c_close > levels["H4"] and c_ema9 > c_ema21:
+        if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"] and c_ema9 > c_ema21:
             new_signal = "BUY"
-        elif float(prior["Close"]) >= levels["L4"] and c_close < levels["L4"] and c_ema9 < c_ema21:
+        elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"] and c_ema9 < c_ema21:
             new_signal = "SELL"
 
         if new_signal and state["active_trade"] is None:
@@ -549,7 +549,7 @@ def trigger_entry(action, price, atr, now_ist, state):
         strike = f"{round(entry / 50.0) * 50} PE"
 
     msg = (
-        f"⚡ *NEW INTRADAY SIGNAL*\n\n"
+        f"⚡ *NEW INTRADAY SIGNAL (3-Min)*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
         f"• *Entry Price:* Rs.{entry}\n"
@@ -577,7 +577,6 @@ def main():
     today_str = now_ist.strftime("%Y-%m-%d")
     weekday = now_ist.weekday()
 
-    # 1. Weekend Check (Saturday = 5, Sunday = 6)
     if weekday >= 5:
         day_name = "Saturday" if weekday == 5 else "Sunday"
         send_telegram(
@@ -589,7 +588,6 @@ def main():
         print("Weekend detected. Workflow exited.")
         sys.exit(0)
 
-    # 2. NSE Holiday Check (Morning 8:58 AM - 9:00 AM Alert with Reason)
     if today_str in NSE_HOLIDAYS_2026:
         reason = NSE_HOLIDAYS_2026[today_str]
         holiday_msg = (
@@ -597,14 +595,13 @@ def main():
             f"• *Date:* {today_str}\n"
             f"• *Occasion:* *{reason}*\n"
             f"• *Status:* Market is officially closed today.\n"
-            f"Live scanner and alerts are paused. Workflow stopped to preserve free minutes."
+            f"Live scanner and alerts are paused."
         )
         send_telegram(holiday_msg, target="all")
-        print(f"Holiday today: {reason}. Notification dispatched. Exiting.")
+        print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    # Active Trading Day
-    send_telegram("🚀 *BOT RUNNING:* System triggered. Execution active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active.", target="admin")
 
     state = load_state()
     init_angel_session()
@@ -616,7 +613,7 @@ def main():
 
             if curr_time > dtime(15, 50):
                 print("Market closed & Daily reports sent. Shutting down bot.")
-                send_telegram("🛑 *SYSTEM SHUTDOWN (3:50 PM):* Daily session completed. Bot stopped to save minutes.", target="admin")
+                send_telegram("🛑 *SYSTEM SHUTDOWN (3:50 PM):* Daily session completed.", target="admin")
                 break
 
             if dtime(8, 58) <= curr_time <= dtime(15, 50):
