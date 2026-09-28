@@ -32,7 +32,7 @@ ANGEL_PIN = os.getenv("ANGEL_PIN", "4099")
 
 BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8"
 ADMIN_CHAT_ID = "6789591588"
-CHANNEL_CHAT_ID = "-100XXXXXXXXXX"
+CHANNEL_CHAT_ID = "-1004416495917"
 
 ADMIN_EMAIL = "shinos99@gmail.com"
 GMAIL_APP_PASS = "wgms etgl eklv cdja"
@@ -204,7 +204,6 @@ def generate_pdf_report(filename, title, subtitle, trades):
     elements.append(Paragraph(subtitle, styles["Normal"]))
     elements.append(Spacer(1, 15))
 
-    # Strict Entry to Exit Table
     table_data = [["Date", "Signal", "Entry Price", "Exit Price", "P&L (Points)", "Reason", "Time"]]
     total_points = 0.0
 
@@ -350,8 +349,8 @@ def process_market_cycle(state):
             state["last_hourly_alert_hour"] = now_ist.hour
             save_state(state)
 
-    # 4. 09:15 AM to 03:00 PM - Signal Processing
-    if dtime(9, 15) <= curr_time <= dtime(15, 0):
+    # 4. 09:30 AM to 03:00 PM - Signal Processing
+    if dtime(9, 30) <= curr_time <= dtime(15, 0):
         high_low = df["High"] - df["Low"]
         high_close = np.abs(df["High"] - df["Close"].shift())
         low_close = np.abs(df["Low"] - df["Close"].shift())
@@ -430,36 +429,15 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # New Signal Scan
+        # New Signal Scan (Only takes new signal if there is NO active trade)
         new_signal = None
         if float(prior["Close"]) <= levels["H4"] and c_close > levels["H4"] and c_ema9 > c_ema21:
             new_signal = "BUY"
         elif float(prior["Close"]) >= levels["L4"] and c_close < levels["L4"] and c_ema9 < c_ema21:
             new_signal = "SELL"
 
-        if new_signal:
-            if state["active_trade"] is None:
-                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-            elif state["active_trade"]["t1_hit"]:
-                prev_action = state["active_trade"]["action"]
-                prev_entry = state["active_trade"]["entry"]
-                exit_price = round(c_close, 2)
-                pnl = (exit_price - prev_entry) if prev_action == "BUY" else (prev_entry - exit_price)
-                
-                send_telegram(
-                    f"⚠️ *EXIT PREVIOUS TRADE ALERT*\n\n"
-                    f"New market momentum formed.\n"
-                    f"• *Exit Current Trade At:* Rs.{exit_price}\n"
-                    f"• *Strict Gain Locked:* {'+' if pnl > 0 else ''}{round(pnl, 2)} Pts",
-                    target="all"
-                )
-                log_trade({
-                    "date": today_str, "action": prev_action,
-                    "entry": prev_entry, "exit": exit_price,
-                    "pnl_points": pnl, "reason": "Replaced by New Signal",
-                    "exit_time": now_ist.strftime("%H:%M")
-                })
-                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
+        if new_signal and state["active_trade"] is None:
+            trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 5. 03:20 PM - Intraday Auto Square-Off
     if dtime(15, 20) <= curr_time < dtime(15, 30):
@@ -571,7 +549,7 @@ def trigger_entry(action, price, atr, now_ist, state):
         strike = f"{round(entry / 50.0) * 50} PE"
 
     msg = (
-        f"⚡ *NEW INTRADAY SIGNAL (ANGEL ONE)*\n\n"
+        f"⚡ *NEW INTRADAY SIGNAL*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
         f"• *Entry Price:* Rs.{entry}\n"
@@ -636,13 +614,11 @@ def main():
             now_ist = datetime.now(IST)
             curr_time = now_ist.time()
 
-            # 3:50 PM കഴിഞ്ഞാൽ റിപ്പോർട്ട് പൂർത്തിയാക്കി തനിയെ ക്ലോസ് ആകും
             if curr_time > dtime(15, 50):
                 print("Market closed & Daily reports sent. Shutting down bot.")
                 send_telegram("🛑 *SYSTEM SHUTDOWN (3:50 PM):* Daily session completed. Bot stopped to save minutes.", target="admin")
                 break
 
-            # 8:58 AM - 3:50 PM Live Scanner Loop
             if dtime(8, 58) <= curr_time <= dtime(15, 50):
                 process_market_cycle(state)
                 time.sleep(5)
