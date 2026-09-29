@@ -446,7 +446,6 @@ def process_market_cycle(state):
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
             
-            # Formulating status based on target hits
             if active.get("t2_hit"):
                 status_str = "Target 1 & Target 2 Achieved (Pending T3 Closed)"
             elif active.get("t1_hit"):
@@ -484,7 +483,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date"] == today_str]
+            today_trades = [t for t in all_trades if t.get("date") == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
