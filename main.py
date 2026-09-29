@@ -445,11 +445,30 @@ def process_market_cycle(state):
             active = state["active_trade"]
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-            send_telegram(f"⏰ *INTRADAY AUTO SQUARE-OFF (3:20 PM)*\nExiting at Rs.{exit_price}.", target="all")
+            
+            # Formulating status based on target hits
+            if active.get("t2_hit"):
+                status_str = "Target 1 & Target 2 Achieved (Pending T3 Closed)"
+            elif active.get("t1_hit"):
+                status_str = "Target 1 Achieved (Pending T2/T3 Closed)"
+            else:
+                status_str = "Running (No Targets Hit)"
+
+            pnl_str = f"{'+' if pnl > 0 else ''}{round(pnl, 2)} pts"
+            sq_msg = (
+                f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
+                f"• *Position:* {active['action']} NIFTY\n"
+                f"• *Status:* {status_str}\n"
+                f"• *Entry Price:* Rs.{active['entry']}\n"
+                f"• *Exit Price:* Rs.{exit_price}\n"
+                f"• *PnL:* {pnl_str}"
+            )
+            send_telegram(sq_msg, target="all")
+            
             log_trade({
                 "date": today_str, "action": active["action"],
                 "entry": active["entry"], "exit": exit_price,
-                "pnl_points": pnl, "reason": "Intraday Close (3:20 PM)",
+                "pnl_points": pnl, "reason": f"Intraday Close ({status_str})",
                 "exit_time": now_ist.strftime("%H:%M")
             })
             state["active_trade"] = None
@@ -465,7 +484,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date") == today_str]
+            today_trades = [t for t in all_trades if t.get("date"] == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
