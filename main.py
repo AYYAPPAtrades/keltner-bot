@@ -99,7 +99,8 @@ def get_angel_nifty_candle_data():
     global smart_api
     try:
         now_dt = datetime.now(IST)
-        from_date = (now_dt - pd.Timedelta(days=5)).strftime("%Y-%m-%d 09:15")
+        # Expanded lookback to 10 days for deeper historical context and better indicator stability
+        from_date = (now_dt - pd.Timedelta(days=10)).strftime("%Y-%m-%d 09:15")
         to_date = now_dt.strftime("%Y-%m-%d %H:%M")
 
         historic_param = {
@@ -429,11 +430,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # New Signal Scan: Using H3 and L3 levels for early momentum signals with EMA filter
+        # Optimized Signal Scan: Enhanced sensitivity using H3/L3 crossover and EMA alignment
         new_signal = None
-        if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"] and c_ema9 > c_ema21:
+        if (float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]) and (c_ema9 >= c_ema21):
             new_signal = "BUY"
-        elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"] and c_ema9 < c_ema21:
+        elif (float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]) and (c_ema9 <= c_ema21):
             new_signal = "SELL"
 
         if new_signal and state["active_trade"] is None:
