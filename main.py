@@ -338,7 +338,7 @@ def process_market_cycle(state):
             cam_levels = calculate_camarilla_levels(df_daily)
 
             hourly_msg = (
-                f"⏱️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
+                f"⏱️️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
                 f"🟢 *Bot Health:* Active (3-Min Frame)\n"
                 f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
                 f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
