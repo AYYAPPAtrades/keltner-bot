@@ -2,28 +2,29 @@ name: SAS LEVEL TRACKER Service
 
 on:
   schedule:
-    - cron: '28 3 * * 1-5'
+    - cron: '28 3 * * 1-5'  # രാവിലെ 8:58 IST-ന് ഓട്ടോമാറ്റിക് ആയി സ്റ്റാർട്ട് ചെയ്യാൻ
   workflow_dispatch:
 
 jobs:
-  run-tracker:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 420
+    timeout-minutes: 420  # 👈 7 മണിക്കൂർ (420 മിനിറ്റ്) ടൈംഔട്ട് സെറ്റ് ചെയ്തിരിക്കുന്നു
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Set Up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Install Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install Dependencies
+      run: |
+        pip install pandas numpy requests pyotp smartapi-python reportlab pytz
 
-      - name: Run Angel One Live Tracker Engine
-        run: |
-          python main.py
+    - name: Run Trading Bot
+      env:
+        ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+        ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+      run: python main.py
