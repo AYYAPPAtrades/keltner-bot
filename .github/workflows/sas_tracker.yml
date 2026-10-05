@@ -21,7 +21,7 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        pip install pandas numpy requests pyotp smartapi-python reportlab pytz logzero
+        pip install pandas numpy requests pyotp smartapi-python reportlab pytz logzero websocket-client
 
     - name: Run Trading Bot
       env:
