@@ -99,7 +99,6 @@ def get_angel_nifty_candle_data():
     global smart_api
     try:
         now_dt = datetime.now(IST)
-        # Expanded lookback to 10 days for deeper historical context and better indicator stability
         from_date = (now_dt - pd.Timedelta(days=10)).strftime("%Y-%m-%d 09:15")
         to_date = now_dt.strftime("%Y-%m-%d %H:%M")
 
@@ -338,7 +337,7 @@ def process_market_cycle(state):
             cam_levels = calculate_camarilla_levels(df_daily)
 
             hourly_msg = (
-                f"⏱️️ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
+                f"⏱ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
                 f"🟢 *Bot Health:* Active (3-Min Frame)\n"
                 f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
                 f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
@@ -357,8 +356,6 @@ def process_market_cycle(state):
         low_close = np.abs(df["Low"] - df["Close"].shift())
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df["ATR"] = tr.rolling(14).mean()
-        df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
-        df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
 
         candle = df.iloc[-1]
         prior = df.iloc[-2]
@@ -366,8 +363,6 @@ def process_market_cycle(state):
         c_high = float(candle["High"])
         c_low = float(candle["Low"])
         c_atr = float(candle["ATR"])
-        c_ema9 = float(candle["EMA9"])
-        c_ema21 = float(candle["EMA21"])
 
         df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
         levels = calculate_camarilla_levels(df_daily)
@@ -430,11 +425,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Optimized Signal Scan: Enhanced sensitivity using H3/L3 crossover and EMA alignment
+        # High-Sensitivity Signal Scan: Triggered directly on H3/L3 crossover without strict EMA checks
         new_signal = None
-        if (float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]) and (c_ema9 >= c_ema21):
+        if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
             new_signal = "BUY"
-        elif (float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]) and (c_ema9 <= c_ema21):
+        elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]:
             new_signal = "SELL"
 
         if new_signal and state["active_trade"] is None:
