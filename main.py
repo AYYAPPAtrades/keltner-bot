@@ -67,11 +67,11 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. DATA FETCH (YAHOO FINANCE) =================
+# ================= 3. DATA FETCH (YAHOO FINANCE - 2 MIN) =================
 def get_nifty_candle_data():
     try:
         ticker = yf.Ticker("^NSEI")
-        df = ticker.history(period="5d", interval="3m")
+        df = ticker.history(period="5d", interval="2m")
         if df is not None and not df.empty:
             df = df.reset_index()
             time_col = "Datetime" if "Datetime" in df.columns else "Date"
@@ -96,7 +96,6 @@ def send_telegram(text: str, target="admin"):
     full_text = f"{header}\n{text}"
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # Send to Admin
     try:
         res = requests.post(
             url, 
@@ -109,7 +108,6 @@ def send_telegram(text: str, target="admin"):
     except Exception as e:
         print(f"Telegram Admin Connection Error: {e}")
 
-    # Send to Channel / Subscribers
     if target == "all" and CHANNEL_CHAT_ID and not CHANNEL_CHAT_ID.startswith("-100XX"):
         try:
             requests.post(
@@ -248,10 +246,9 @@ def process_market_cycle(state):
     curr_time = now_ist.time()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    # 1. 09:00 AM - Market Session Start Alert (Admin Only)
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min Frame).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -259,7 +256,6 @@ def process_market_cycle(state):
     if df is None or len(df) < 20:
         return
 
-    # 2. 09:05 AM - Nifty Resistance and Support Levels (Admin & Channel)
     if dtime(9, 5) <= curr_time < dtime(9, 15):
         if not state.get("support_sent_today"):
             df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
@@ -276,7 +272,6 @@ def process_market_cycle(state):
             state["support_sent_today"] = True
             save_state(state)
 
-    # 3. HOURLY STATUS ALERT (ADMIN ONLY)
     if 10 <= now_ist.hour <= 15:
         if state.get("last_hourly_alert_hour") != now_ist.hour:
             c_spot = round(float(df.iloc[-1]["Close"]), 2)
@@ -303,7 +298,7 @@ def process_market_cycle(state):
 
             hourly_msg = (
                 f"⏱ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (3-Min Frame)\n"
+                f"🟢 *Bot Health:* Active (2-Min Frame)\n"
                 f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
                 f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
@@ -314,7 +309,6 @@ def process_market_cycle(state):
             state["last_hourly_alert_hour"] = now_ist.hour
             save_state(state)
 
-    # 4. 09:30 AM to 03:00 PM - Signal Processing
     if dtime(9, 30) <= curr_time <= dtime(15, 0):
         high_low = df["High"] - df["Low"]
         high_close = np.abs(df["High"] - df["Close"].shift())
@@ -333,9 +327,7 @@ def process_market_cycle(state):
         levels = calculate_camarilla_levels(df_daily)
         active = state.get("active_trade")
 
-        # Active Trade Management
         if active is not None:
-            # T1 Achieved
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):
                     active["t1_hit"] = True
@@ -348,14 +340,12 @@ def process_market_cycle(state):
                     send_telegram(msg, target="all")
                     save_state(state)
 
-            # T2 Achieved
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t2"]) or (active["action"] == "SELL" and c_low <= active["t2"]):
                     active["t2_hit"] = True
                     send_telegram(f"🚀 *TARGET 2 (T2) ACHIEVED! [Rs.{active['t2']}]*\nTrail stops to lock profit.", target="all")
                     save_state(state)
 
-            # T3 Hit (Complete Exit)
             if active["t2_hit"] and not active["t3_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t3"]) or (active["action"] == "SELL" and c_low <= active["t3"]):
                     active["t3_hit"] = True
@@ -373,7 +363,6 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-            # SL Check (Only prior to T1)
             if active["sl_active"]:
                 sl_hit = (active["action"] == "BUY" and c_low <= active["sl"]) or (active["action"] == "SELL" and c_high >= active["sl"])
                 if sl_hit:
@@ -390,7 +379,6 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # High-Sensitivity Signal Scan (If a trade is active, check if we need to exit previous on opposite signal)
         new_signal = None
         if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
             new_signal = "BUY"
@@ -399,8 +387,6 @@ def process_market_cycle(state):
 
         if new_signal:
             if active is not None:
-                # If active trade has NOT hit T1 yet, do not override unless T1 is done.
-                # Per instructions: "T1 അടിച്ച ശേഷം പുതിയ Signal വന്നാൽ Exit Previous alert"
                 if active["t1_hit"]:
                     exit_price = c_close
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
@@ -415,215 +401,3 @@ def process_market_cycle(state):
                     save_state(state)
                     trigger_entry(new_signal, c_close, c_atr, now_ist, state)
             else:
-                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-
-    # 5. 03:20 PM - Intraday Auto Square-Off
-    if dtime(15, 20) <= curr_time < dtime(15, 30):
-        if state.get("active_trade") is not None:
-            active = state["active_trade"]
-            exit_price = round(float(df.iloc[-1]["Close"]), 2)
-            pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-            
-            if active.get("t2_hit"):
-                status_str = "Target 1 & Target 2 Achieved (Pending T3 Closed)"
-            elif active.get("t1_hit"):
-                status_str = "Target 1 Achieved (Pending T2/T3 Closed)"
-            else:
-                status_str = "Running (No Targets Hit)"
-
-            pnl_str = f"{'+' if pnl > 0 else ''}{round(pnl, 2)} pts"
-            sq_msg = (
-                f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
-                f"• *Position:* {active['action']} NIFTY\n"
-                f"• *Status:* {status_str}\n"
-                f"• *Entry Price:* Rs.{active['entry']}\n"
-                f"• *Exit Price:* Rs.{exit_price}\n"
-                f"• *PnL:* {pnl_str}"
-            )
-            send_telegram(sq_msg, target="all")
-            
-            log_trade({
-                "date": today_str, "action": active["action"],
-                "entry": active["entry"], "exit": exit_price,
-                "pnl_points": pnl, "reason": f"Intraday Close ({status_str})",
-                "exit_time": now_ist.strftime("%H:%M")
-            })
-            state["active_trade"] = None
-            save_state(state)
-
-    # 6. 03:45 PM - Daily Report
-    if dtime(15, 45) <= curr_time < dtime(15, 55):
-        if not state.get("daily_report_sent_today"):
-            all_trades = []
-            if os.path.exists(HISTORY_FILE):
-                try:
-                    with open(HISTORY_FILE, "r") as f:
-                        all_trades = json.load(f)
-                except Exception:
-                    pass
-            today_trades = [t for t in all_trades if t.get("date") == today_str]
-
-            pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
-            generate_pdf_report(
-                pdf_filename,
-                f"SAS LEVEL TRACKER - DAILY REPORT",
-                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
-                today_trades
-            )
-            send_email_with_attachment(
-                pdf_filename,
-                f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
-                f"Hello Admin,\n\nPlease find attached the Daily P&L Report for {today_str}."
-            )
-            net_pts = sum(t["pnl_points"] for t in today_trades)
-            send_telegram(
-                f"📄 *DAILY P&L REPORT (3:45 PM)*\n\n"
-                f"• *Date:* {today_str}\n"
-                f"• *Trades Executed:* {len(today_trades)}\n"
-                f"• *Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
-                f"Verified PDF sent to Admin email ({ADMIN_EMAIL}).",
-                target="all"
-            )
-            state["daily_report_sent_today"] = True
-            save_state(state)
-
-    # 7. 03:45 PM - Monthly Expiry Report
-    if dtime(15, 45) <= curr_time < dtime(15, 55):
-        if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
-            all_cycle_trades = []
-            if os.path.exists(HISTORY_FILE):
-                try:
-                    with open(HISTORY_FILE, "r") as f:
-                        all_cycle_trades = json.load(f)
-                except Exception:
-                    pass
-
-            month_str = now_ist.strftime("%B_%Y")
-            monthly_pdf = f"SAS_Monthly_Expiry_Report_{month_str}.pdf"
-            generate_pdf_report(
-                monthly_pdf,
-                f"SAS LEVEL TRACKER - MONTHLY EXPIRY DETAILED REPORT",
-                f"<b>Expiry Date:</b> {today_str} | <b>Cycle:</b> Expiry to Expiry Detailed P&L",
-                all_cycle_trades
-            )
-            send_email_with_attachment(
-                monthly_pdf,
-                f"SAS LEVEL TRACKER: Monthly Expiry-to-Expiry Report ({month_str})",
-                f"Hello Admin,\n\nToday is Monthly Expiry Day. Attached is the complete Expiry-to-Expiry performance log."
-            )
-            total_cycle_pts = sum(t["pnl_points"] for t in all_cycle_trades)
-            send_telegram(
-                f"🏆 *MONTHLY EXPIRY-TO-EXPIRY REPORT (3:45 PM)*\n\n"
-                f"Today marks the Monthly Expiry Day!\n"
-                f"• *Total Cycle Trades:* {len(all_cycle_trades)}\n"
-                f"• *Total Cycle Net P&L:* {'+' if total_cycle_pts > 0 else ''}{round(total_cycle_pts, 2)} Pts\n"
-                f"Detailed Monthly P&L statement dispatched to Admin email.",
-                target="all"
-            )
-            clear_expiry_cycle_trades()
-            state["monthly_report_sent_today"] = True
-            save_state(state)
-
-def trigger_entry(action, price, atr, now_ist, state):
-    sl_dist = max(round(1.2 * atr, 1), 22.0)
-    t1_dist = round(sl_dist * 1.0, 1)
-    t2_dist = round(sl_dist * 1.8, 1)
-    t3_dist = round(sl_dist * 2.8, 1)
-
-    entry = round(price, 2)
-    if action == "BUY":
-        sl = round(entry - sl_dist, 2)
-        t1 = round(entry + t1_dist, 2)
-        t2 = round(entry + t2_dist, 2)
-        t3 = round(entry + t3_dist, 2)
-        strike = f"{round(entry / 50.0) * 50} CE"
-    else:
-        sl = round(entry + sl_dist, 2)
-        t1 = round(entry - t1_dist, 2)
-        t2 = round(entry - t2_dist, 2)
-        t3 = round(entry - t3_dist, 2)
-        strike = f"{round(entry / 50.0) * 50} PE"
-
-    msg = (
-        f"⚡ *NEW INTRADAY SIGNAL (3-Min)*\n\n"
-        f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
-        f"• *Action:* *{action}*\n"
-        f"• *Entry Price:* Rs.{entry}\n"
-        f"• *Target 1 (T1):* Rs.{t1}\n"
-        f"• *Target 2 (T2):* Rs.{t2}\n"
-        f"• *Target 3 (T3):* Rs.{t3}\n"
-        f"• *Stop Loss (SL):* Rs.{sl}\n"
-        f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
-    )
-    send_telegram(msg, target="all")
-
-    state["active_trade"] = {
-        "action": action, "entry": entry,
-        "t1": t1, "t2": t2, "t3": t3, "sl": sl,
-        "t1_hit": False, "t2_hit": False, "t3_hit": False,
-        "sl_active": True, "entry_time": now_ist.strftime("%H:%M")
-    }
-    save_state(state)
-
-# ================= 9. MASTER BOT LOOP =================
-def main():
-    print("Starting SAS LEVEL TRACKER Service...")
-    
-    now_ist = datetime.now(IST)
-    today_str = now_ist.strftime("%Y-%m-%d")
-    weekday = now_ist.weekday()
-
-    if weekday >= 5:
-        day_name = "Saturday" if weekday == 5 else "Sunday"
-        send_telegram(
-            f"🏖️ *WEEKEND PAUSE ({day_name})*\n\n"
-            f"Market is closed today. Live scanner is inactive.\n"
-            f"Workflow stopped immediately to save minutes.",
-            target="admin"
-        )
-        print("Weekend detected. Workflow exited.")
-        sys.exit(0)
-
-    if today_str in NSE_HOLIDAYS_2026:
-        reason = NSE_HOLIDAYS_2026[today_str]
-        holiday_msg = (
-            f"🏖️ *MARKET HOLIDAY ALERT (NSE/BSE)*\n\n"
-            f"• *Date:* {today_str}\n"
-            f"• *Occasion:* *{reason}*\n"
-            f"• *Status:* Market is officially closed today.\n"
-            f"Live scanner and alerts are paused."
-        )
-        send_telegram(holiday_msg, target="all")
-        print(f"Holiday today: {reason}. Exiting.")
-        sys.exit(0)
-
-    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active.", target="admin")
-
-    state = load_state()
-
-    while True:
-        try:
-            now_ist = datetime.now(IST)
-            curr_time = now_ist.time()
-
-            # Extended run time up to 3:40 PM per instructions
-            if curr_time > dtime(15, 40):
-                print("Market session completed. Shutting down bot.")
-                send_telegram("🛑 *SYSTEM SHUTDOWN (3:40 PM):* Daily session completed.", target="admin")
-                break
-
-            if dtime(8, 58) <= curr_time <= dtime(15, 40):
-                process_market_cycle(state)
-                time.sleep(5)
-            else:
-                time.sleep(30)
-
-        except Exception as e:
-            print(f"Engine Loop Error: {e}")
-            time.sleep(10)
-
-    print("Workflow completed successfully.")
-    sys.exit(0)
-
-if __name__ == "__main__":
-    main()
