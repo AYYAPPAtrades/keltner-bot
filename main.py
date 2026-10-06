@@ -383,21 +383,4 @@ def process_market_cycle(state):
         if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
             new_signal = "BUY"
         elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]:
-            new_signal = "SELL"
-
-        if new_signal:
-            if active is not None:
-                if active["t1_hit"]:
-                    exit_price = c_close
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *NEW SIGNAL RECEIVED:* Exit previous running trade at Rs.{exit_price} and switch position.", target="all")
-                    log_trade({
-                        "date": today_str, "action": active["action"],
-                        "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Switched on New Signal",
-                        "exit_time": now_ist.strftime("%H:%M")
-                    })
-                    state["active_trade"] = None
-                    save_state(state)
-                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-            else:
+            new_signal =
