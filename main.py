@@ -5,18 +5,15 @@ import time
 import smtplib
 import calendar
 import requests
-import pyotp
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from datetime import datetime, date, timedelta, time as dtime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 import pytz
-
-# SmartAPI (Angel One)
-from SmartApi import SmartConnect
 
 # ReportLab for PDF generation
 from reportlab.lib.pagesizes import letter
@@ -25,11 +22,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # ================= 1. CREDENTIALS & CONSTANTS =================
-ANGEL_API_KEY = "Qm1mu8xU"
-ANGEL_TOTP_KEY = "XXWTRAQWY6B4XGDBHD2YAJRVJE"
-ANGEL_CLIENT_CODE = os.getenv("ANGEL_CLIENT_CODE", "AACM196001")
-ANGEL_PIN = os.getenv("ANGEL_PIN", "4099")
-
 BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8"
 ADMIN_CHAT_ID = "6789591588"
 CHANNEL_CHAT_ID = "-1004416495917"
@@ -56,8 +48,6 @@ NSE_HOLIDAYS_2026 = {
     "2026-12-25": "Christmas"
 }
 
-smart_api = None
-
 # ================= 2. MONTHLY EXPIRY CALCULATOR =================
 def get_monthly_expiry_date(year, month):
     last_day = calendar.monthrange(year, month)[1]
@@ -77,48 +67,28 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. ANGEL ONE SMART API =================
-def init_angel_session():
-    global smart_api
+# ================= 3. YAHOO FINANCE DATA FETCH =================
+def get_nifty_candle_data():
     try:
-        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
-        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
-        data = smart_api.generateSession(ANGEL_CLIENT_CODE, ANGEL_PIN, totp)
-        if data and data.get("status"):
-            print("Angel One Session Authenticated Successfully.")
-            return True
-        else:
-            err_msg = data.get("message") if data else "Unknown"
-            print(f"Angel One Login Failed: {err_msg}")
-            return False
-    except Exception as e:
-        print(f"Error during Angel One login: {e}")
-        return False
-
-def get_angel_nifty_candle_data():
-    global smart_api
-    try:
-        now_dt = datetime.now(IST)
-        from_date = (now_dt - pd.Timedelta(days=10)).strftime("%Y-%m-%d 09:15")
-        to_date = now_dt.strftime("%Y-%m-%d %H:%M")
-
-        historic_param = {
-            "exchange": "NSE",
-            "symboltoken": "99926000",
-            "interval": "THREE_MINUTE",
-            "fromdate": from_date,
-            "todate": to_date
-        }
-        res = smart_api.getCandleData(historic_param)
-        if res and res.get("status") and res.get("data"):
-            cols = ["Timestamp", "Open", "High", "Low", "Close", "Volume"]
-            df = pd.DataFrame(res["data"], columns=cols)
+        # Fetching Nifty 50 data (^NSEI) from Yahoo Finance (3-minute interval)
+        ticker = yf.Ticker("^NSEI")
+        df = ticker.history(period="5d", interval="3m")
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            # Handle column naming variations depending on yfinance version
+            time_col = "Datetime" if "Datetime" in df.columns else "Date"
+            df = df.rename(columns={time_col: "Timestamp", "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"})
             df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+            # Convert to IST if timezone-aware
+            if df["Timestamp"].dt.tz is not None:
+                df["Timestamp"] = df["Timestamp"].dt.tz_convert(IST)
+            else:
+                df["Timestamp"] = df["Timestamp"].dt.tz_localize("UTC").dt.tz_convert(IST)
+            
             df.set_index("Timestamp", inplace=True)
-            return df
-        else:
-            init_angel_session()
-            return None
+            df.index = df.index.tz_localize(None) # Make index naive for internal comparisons
+            return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        return None
     except Exception as e:
         print(f"Data Fetch Exception: {e}")
         return None
@@ -286,11 +256,11 @@ def process_market_cycle(state):
     # 1. 09:00 AM - Market Session Start Alert (Admin Only)
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame via Yahoo Finance).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
-    df = get_angel_nifty_candle_data()
+    df = get_nifty_candle_data()
     if df is None or len(df) < 20:
         return
 
@@ -425,7 +395,7 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # High-Sensitivity Signal Scan: Triggered directly on H3/L3 crossover without strict EMA checks
+        # High-Sensitivity Signal Scan: Triggered directly on H3/L3 crossover
         new_signal = None
         if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
             new_signal = "BUY"
@@ -615,10 +585,9 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active (Yahoo Finance).", target="admin")
 
     state = load_state()
-    init_angel_session()
 
     while True:
         try:
