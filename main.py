@@ -67,26 +67,23 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. YAHOO FINANCE DATA FETCH =================
+# ================= 3. DATA FETCH (YAHOO FINANCE) =================
 def get_nifty_candle_data():
     try:
-        # Fetching Nifty 50 data (^NSEI) from Yahoo Finance (3-minute interval)
         ticker = yf.Ticker("^NSEI")
         df = ticker.history(period="5d", interval="3m")
         if df is not None and not df.empty:
             df = df.reset_index()
-            # Handle column naming variations depending on yfinance version
             time_col = "Datetime" if "Datetime" in df.columns else "Date"
             df = df.rename(columns={time_col: "Timestamp", "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"})
             df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-            # Convert to IST if timezone-aware
             if df["Timestamp"].dt.tz is not None:
                 df["Timestamp"] = df["Timestamp"].dt.tz_convert(IST)
             else:
                 df["Timestamp"] = df["Timestamp"].dt.tz_localize("UTC").dt.tz_convert(IST)
             
             df.set_index("Timestamp", inplace=True)
-            df.index = df.index.tz_localize(None) # Make index naive for internal comparisons
+            df.index = df.index.tz_localize(None)
             return df[['Open', 'High', 'Low', 'Close', 'Volume']]
         return None
     except Exception as e:
@@ -99,7 +96,7 @@ def send_telegram(text: str, target="admin"):
     full_text = f"{header}\n{text}"
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # 1. Send to Admin
+    # Send to Admin
     try:
         res = requests.post(
             url, 
@@ -109,12 +106,10 @@ def send_telegram(text: str, target="admin"):
         data = res.json()
         if not data.get("ok"):
             print(f"Telegram Admin Error [{res.status_code}]: {data.get('description')}")
-        else:
-            print("Telegram Alert Dispatched to Admin Successfully!")
     except Exception as e:
         print(f"Telegram Admin Connection Error: {e}")
 
-    # 2. Send to Channel / Subscribers
+    # Send to Channel / Subscribers
     if target == "all" and CHANNEL_CHAT_ID and not CHANNEL_CHAT_ID.startswith("-100XX"):
         try:
             requests.post(
@@ -256,7 +251,7 @@ def process_market_cycle(state):
     # 1. 09:00 AM - Market Session Start Alert (Admin Only)
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame via Yahoo Finance).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (3-Min Frame).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -264,7 +259,7 @@ def process_market_cycle(state):
     if df is None or len(df) < 20:
         return
 
-    # 2. 09:05 AM - Nifty Resistance and Support Levels
+    # 2. 09:05 AM - Nifty Resistance and Support Levels (Admin & Channel)
     if dtime(9, 5) <= curr_time < dtime(9, 15):
         if not state.get("support_sent_today"):
             df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
@@ -395,15 +390,32 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # High-Sensitivity Signal Scan: Triggered directly on H3/L3 crossover
+        # High-Sensitivity Signal Scan (If a trade is active, check if we need to exit previous on opposite signal)
         new_signal = None
         if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
             new_signal = "BUY"
         elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]:
             new_signal = "SELL"
 
-        if new_signal and state["active_trade"] is None:
-            trigger_entry(new_signal, c_close, c_atr, now_ist, state)
+        if new_signal:
+            if active is not None:
+                # If active trade has NOT hit T1 yet, do not override unless T1 is done.
+                # Per instructions: "T1 അടിച്ച ശേഷം പുതിയ Signal വന്നാൽ Exit Previous alert"
+                if active["t1_hit"]:
+                    exit_price = c_close
+                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    send_telegram(f"🔄 *NEW SIGNAL RECEIVED:* Exit previous running trade at Rs.{exit_price} and switch position.", target="all")
+                    log_trade({
+                        "date": today_str, "action": active["action"],
+                        "entry": active["entry"], "exit": exit_price,
+                        "pnl_points": pnl, "reason": "Switched on New Signal",
+                        "exit_time": now_ist.strftime("%H:%M")
+                    })
+                    state["active_trade"] = None
+                    save_state(state)
+                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
+            else:
+                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 5. 03:20 PM - Intraday Auto Square-Off
     if dtime(15, 20) <= curr_time < dtime(15, 30):
@@ -455,7 +467,7 @@ def process_market_cycle(state):
             generate_pdf_report(
                 pdf_filename,
                 f"SAS LEVEL TRACKER - DAILY REPORT",
-                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Strict Entry to Exit",
+                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
                 today_trades
             )
             send_email_with_attachment(
@@ -468,7 +480,7 @@ def process_market_cycle(state):
                 f"📄 *DAILY P&L REPORT (3:45 PM)*\n\n"
                 f"• *Date:* {today_str}\n"
                 f"• *Trades Executed:* {len(today_trades)}\n"
-                f"• *Strict Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
+                f"• *Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
                 f"Verified PDF sent to Admin email ({ADMIN_EMAIL}).",
                 target="all"
             )
@@ -585,7 +597,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active (Yahoo Finance).", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 3-Minute Scanner Active.", target="admin")
 
     state = load_state()
 
@@ -594,12 +606,13 @@ def main():
             now_ist = datetime.now(IST)
             curr_time = now_ist.time()
 
-            if curr_time > dtime(15, 50):
-                print("Market closed & Daily reports sent. Shutting down bot.")
-                send_telegram("🛑 *SYSTEM SHUTDOWN (3:50 PM):* Daily session completed.", target="admin")
+            # Extended run time up to 3:40 PM per instructions
+            if curr_time > dtime(15, 40):
+                print("Market session completed. Shutting down bot.")
+                send_telegram("🛑 *SYSTEM SHUTDOWN (3:40 PM):* Daily session completed.", target="admin")
                 break
 
-            if dtime(8, 58) <= curr_time <= dtime(15, 50):
+            if dtime(8, 58) <= curr_time <= dtime(15, 40):
                 process_market_cycle(state)
                 time.sleep(5)
             else:
