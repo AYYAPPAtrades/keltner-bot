@@ -227,7 +227,7 @@ def send_email_with_attachment(pdf_path, subject, body_text):
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# ================= 7. TECHNICAL CALCULATIONS =================
+# ================= 7. TECHNICAL CALCULATIONS & SUPERTREND =================
 def calculate_camarilla_levels(df_daily):
     prev = df_daily.iloc[-2]
     h, l, c = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
@@ -240,6 +240,46 @@ def calculate_camarilla_levels(df_daily):
         "PP": round((h + l + c) / 3.0, 2)
     }
 
+def calculate_supertrend(df, period=10, multiplier=3):
+    hl2 = (df["High"] + df["Low"]) / 2
+    high_low = df["High"] - df["Low"]
+    high_close = np.abs(df["High"] - df["Close"].shift())
+    low_close = np.abs(df["Low"] - df["Close"].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+
+    upper_basic = hl2 + (multiplier * atr)
+    lower_basic = hl2 - (multiplier * atr)
+
+    upper_band = [0.0] * len(df)
+    lower_band = [0.0] * len(df)
+    supertrend = [True] * len(df) # True for Bullish, False for Bearish
+
+    for i in range(period, len(df)):
+        # Upper band
+        if upper_basic.iloc[i] < upper_band[i-1] or df["Close"].iloc[i-1] > upper_band[i-1]:
+            upper_band[i] = upper_basic.iloc[i]
+        else:
+            upper_band[i] = upper_band[i-1]
+
+        # Lower band
+        if lower_basic.iloc[i] > lower_band[i-1] or df["Close"].iloc[i-1] < lower_band[i-1]:
+            lower_band[i] = lower_basic.iloc[i]
+        else:
+            lower_band[i] = lower_band[i-1]
+
+        # Supertrend direction
+        if i == period:
+            supertrend[i] = True if df["Close"].iloc[i] > upper_basic.iloc[i] else False
+        else:
+            if supertrend[i-1]:
+                supertrend[i] = False if df["Close"].iloc[i] < lower_band[i] else True
+            else:
+                supertrend[i] = True if df["Close"].iloc[i] > upper_band[i] else False
+
+    df["Supertrend"] = supertrend
+    return df
+
 # ================= 8. INTRADAY SCANNER & TARGET RULES =================
 def process_market_cycle(state):
     now_ist = datetime.now(IST)
@@ -248,13 +288,15 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min Frame).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min Frame with Supertrend & High Sensitivity).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
     df = get_nifty_candle_data()
-    if df is None or len(df) < 20:
+    if df is None or len(df) < 25:
         return
+
+    df = calculate_supertrend(df)
 
     if dtime(9, 5) <= curr_time < dtime(9, 15):
         if not state.get("support_sent_today"):
@@ -317,11 +359,11 @@ def process_market_cycle(state):
         df["ATR"] = tr.rolling(14).mean()
 
         candle = df.iloc[-1]
-        prior = df.iloc[-2]
         c_close = float(candle["Close"])
         c_high = float(candle["High"])
         c_low = float(candle["Low"])
         c_atr = float(candle["ATR"])
+        c_st = bool(candle["Supertrend"])
 
         df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
         levels = calculate_camarilla_levels(df_daily)
@@ -379,10 +421,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
+        # High Sensitivity & Supertrend Combo Signal Scan (Touch/Break of H3/L3 + Supertrend filter)
         new_signal = None
-        if float(prior["Close"]) <= levels["H3"] and c_close > levels["H3"]:
+        if c_high >= levels["H3"] and c_st:
             new_signal = "BUY"
-        elif float(prior["Close"]) >= levels["L3"] and c_close < levels["L3"]:
+        elif c_low <= levels["L3"] and not c_st:
             new_signal = "SELL"
 
         if new_signal:
@@ -579,7 +622,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 2-Minute Scanner Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 2-Minute Supertrend Scanner Active.", target="admin")
 
     state = load_state()
 
