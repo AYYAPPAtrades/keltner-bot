@@ -436,7 +436,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date"] == today_str]
+            today_trades = [t for t in all_trades if t.get("date") == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
