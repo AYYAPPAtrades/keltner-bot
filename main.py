@@ -227,58 +227,16 @@ def send_email_with_attachment(pdf_path, subject, body_text):
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# ================= 7. TECHNICAL CALCULATIONS & SUPERTREND =================
-def calculate_camarilla_levels(df_daily):
-    prev = df_daily.iloc[-2]
-    h, l, c = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
-    diff = h - l
-    return {
-        "H4": round(c + (diff * 1.1 / 2.0), 2),
-        "H3": round(c + (diff * 1.1 / 4.0), 2),
-        "L3": round(c - (diff * 1.1 / 4.0), 2),
-        "L4": round(c - (diff * 1.1 / 2.0), 2),
-        "PP": round((h + l + c) / 3.0, 2)
-    }
-
-def calculate_supertrend(df, period=10, multiplier=3):
-    hl2 = (df["High"] + df["Low"]) / 2
-    high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-
-    upper_basic = hl2 + (multiplier * atr)
-    lower_basic = hl2 - (multiplier * atr)
-
-    upper_band = [0.0] * len(df)
-    lower_band = [0.0] * len(df)
-    supertrend = [True] * len(df) # True for Bullish, False for Bearish
-
-    for i in range(period, len(df)):
-        # Upper band
-        if upper_basic.iloc[i] < upper_band[i-1] or df["Close"].iloc[i-1] > upper_band[i-1]:
-            upper_band[i] = upper_basic.iloc[i]
-        else:
-            upper_band[i] = upper_band[i-1]
-
-        # Lower band
-        if lower_basic.iloc[i] > lower_band[i-1] or df["Close"].iloc[i-1] < lower_band[i-1]:
-            lower_band[i] = lower_basic.iloc[i]
-        else:
-            lower_band[i] = lower_band[i-1]
-
-        # Supertrend direction
-        if i == period:
-            supertrend[i] = True if df["Close"].iloc[i] > upper_basic.iloc[i] else False
-        else:
-            if supertrend[i-1]:
-                supertrend[i] = False if df["Close"].iloc[i] < lower_band[i] else True
-            else:
-                supertrend[i] = True if df["Close"].iloc[i] > upper_band[i] else False
-
-    df["Supertrend"] = supertrend
-    return df
+# ================= 7. PREVIOUS DAY HIGH / LOW CALCULATOR =================
+def get_pdh_pdl_levels(df):
+    df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+    if len(df_daily) >= 2:
+        prev = df_daily.iloc[-2]
+        return {
+            "PDH": round(float(prev["High"]), 2),
+            "PDL": round(float(prev["Low"]), 2)
+        }
+    return {"PDH": 0.0, "PDL": 0.0}
 
 # ================= 8. INTRADAY SCANNER & TARGET RULES =================
 def process_market_cycle(state):
@@ -288,27 +246,22 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min Frame with Supertrend & High Sensitivity).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min PDH/PDL Strategy).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
     df = get_nifty_candle_data()
-    if df is None or len(df) < 25:
+    if df is None or len(df) < 20:
         return
 
-    df = calculate_supertrend(df)
+    levels = get_pdh_pdl_levels(df)
 
     if dtime(9, 5) <= curr_time < dtime(9, 15):
         if not state.get("support_sent_today"):
-            df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-            levels = calculate_camarilla_levels(df_daily)
             msg = (
-                f"📊 *NIFTY INTRADAY LEVELS (Live Feed)*\n\n"
-                f"• *Resistance 2 (H4):* Rs.{levels['H4']}\n"
-                f"• *Resistance 1 (H3):* Rs.{levels['H3']}\n"
-                f"• *Pivot Point (PP):* Rs.{levels['PP']}\n"
-                f"• *Support 1 (L3):* Rs.{levels['L3']}\n"
-                f"• *Support 2 (L4):* Rs.{levels['L4']}"
+                f"📊 *NIFTY PDH / PDL LEVELS (Live Feed)*\n\n"
+                f"• *Previous Day High (PDH):* Rs.{levels['PDH']}\n"
+                f"• *Previous Day Low (PDL):* Rs.{levels['PDL']}"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -335,17 +288,14 @@ def process_market_cycle(state):
                 except Exception:
                     pass
 
-            df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-            cam_levels = calculate_camarilla_levels(df_daily)
-
             hourly_msg = (
                 f"⏱ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (2-Min Frame)\n"
+                f"🟢 *Bot Health:* Active (2-Min PDH/PDL Strategy)\n"
                 f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
                 f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Trades Closed:* {trades_cnt}\n"
-                f"🎯 *Key Levels:* H3: Rs.{cam_levels['H3']} | L3: Rs.{cam_levels['L3']}"
+                f"🎯 *Key Levels:* PDH: Rs.{levels['PDH']} | PDL: Rs.{levels['PDL']}"
             )
             send_telegram(hourly_msg, target="admin")
             state["last_hourly_alert_hour"] = now_ist.hour
@@ -359,14 +309,12 @@ def process_market_cycle(state):
         df["ATR"] = tr.rolling(14).mean()
 
         candle = df.iloc[-1]
+        prior = df.iloc[-2]
         c_close = float(candle["Close"])
         c_high = float(candle["High"])
         c_low = float(candle["Low"])
         c_atr = float(candle["ATR"])
-        c_st = bool(candle["Supertrend"])
 
-        df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-        levels = calculate_camarilla_levels(df_daily)
         active = state.get("active_trade")
 
         if active is not None:
@@ -421,11 +369,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # High Sensitivity & Supertrend Combo Signal Scan (Touch/Break of H3/L3 + Supertrend filter)
+        # PDH / PDL Breakout Signal Scan
         new_signal = None
-        if c_high >= levels["H3"] and c_st:
+        if float(prior["Close"]) <= levels["PDH"] and c_close > levels["PDH"]:
             new_signal = "BUY"
-        elif c_low <= levels["L3"] and not c_st:
+        elif float(prior["Close"]) >= levels["PDL"] and c_close < levels["PDL"]:
             new_signal = "SELL"
 
         if new_signal:
@@ -488,7 +436,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date") == today_str]
+            today_trades = [t for t in all_trades if t.get("date"] == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
@@ -571,7 +519,7 @@ def trigger_entry(action, price, atr, now_ist, state):
         strike = f"{round(entry / 50.0) * 50} PE"
 
     msg = (
-        f"⚡ *NEW INTRADAY SIGNAL (2-Min)*\n\n"
+        f"⚡ *NEW INTRADAY SIGNAL (2-Min PDH/PDL)*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
         f"• *Entry Price:* Rs.{entry}\n"
@@ -622,7 +570,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 2-Minute Supertrend Scanner Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 2-Minute PDH/PDL Breakout Scanner Active.", target="admin")
 
     state = load_state()
 
