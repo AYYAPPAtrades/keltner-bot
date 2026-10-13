@@ -67,11 +67,11 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. DATA FETCH (YAHOO FINANCE - 2 MIN) =================
+# ================= 3. DATA FETCH (YAHOO FINANCE - 1 MIN SCALPING) =================
 def get_nifty_candle_data():
     try:
         ticker = yf.Ticker("^NSEI")
-        df = ticker.history(period="5d", interval="2m")
+        df = ticker.history(period="2d", interval="1m")
         if df is not None and not df.empty:
             df = df.reset_index()
             time_col = "Datetime" if "Datetime" in df.columns else "Date"
@@ -227,18 +227,56 @@ def send_email_with_attachment(pdf_path, subject, body_text):
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# ================= 7. PREVIOUS DAY HIGH / LOW CALCULATOR =================
-def get_pdh_pdl_levels(df):
-    df_daily = df.resample("D").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-    if len(df_daily) >= 2:
-        prev = df_daily.iloc[-2]
-        return {
-            "PDH": round(float(prev["High"]), 2),
-            "PDL": round(float(prev["Low"]), 2)
-        }
-    return {"PDH": 0.0, "PDL": 0.0}
+# ================= 7. SCALPING INDICATORS (EMA, RSI, SUPERTREND) =================
+def calculate_indicators(df):
+    df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
+    df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
 
-# ================= 8. INTRADAY SCANNER & TARGET RULES =================
+    # RSI 14
+    delta = df["Close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    # Supertrend
+    hl2 = (df["High"] + df["Low"]) / 2
+    high_low = df["High"] - df["Low"]
+    high_close = np.abs(df["High"] - df["Close"].shift())
+    low_close = np.abs(df["Low"] - df["Close"].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(10).mean()
+    df["ATR"] = atr
+
+    upper_basic = hl2 + (3 * atr)
+    lower_basic = hl2 - (3 * atr)
+    upper_band = [0.0] * len(df)
+    lower_band = [0.0] * len(df)
+    supertrend = [True] * len(df)
+
+    for i in range(10, len(df)):
+        if upper_basic.iloc[i] < upper_band[i-1] or df["Close"].iloc[i-1] > upper_band[i-1]:
+            upper_band[i] = upper_basic.iloc[i]
+        else:
+            upper_band[i] = upper_band[i-1]
+
+        if lower_basic.iloc[i] > lower_band[i-1] or df["Close"].iloc[i-1] < lower_band[i-1]:
+            lower_band[i] = lower_basic.iloc[i]
+        else:
+            lower_band[i] = lower_band[i-1]
+
+        if i == 10:
+            supertrend[i] = True if df["Close"].iloc[i] > upper_basic.iloc[i] else False
+        else:
+            if supertrend[i-1]:
+                supertrend[i] = False if df["Close"].iloc[i] < lower_band[i] else True
+            else:
+                supertrend[i] = True if df["Close"].iloc[i] > upper_band[i] else False
+
+    df["Supertrend"] = supertrend
+    return df
+
+# ================= 8. INTRADAY SCALPING SCANNER =================
 def process_market_cycle(state):
     now_ist = datetime.now(IST)
     curr_time = now_ist.time()
@@ -246,22 +284,23 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday continuous cycle active (2-Min PDH/PDL Strategy).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday 1-Min Scalping Bot Active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
     df = get_nifty_candle_data()
-    if df is None or len(df) < 20:
+    if df is None or len(df) < 30:
         return
 
-    levels = get_pdh_pdl_levels(df)
+    df = calculate_indicators(df)
 
     if dtime(9, 5) <= curr_time < dtime(9, 15):
         if not state.get("support_sent_today"):
+            c_spot = round(float(df.iloc[-1]["Close"]), 2)
             msg = (
-                f"📊 *NIFTY PDH / PDL LEVELS (Live Feed)*\n\n"
-                f"• *Previous Day High (PDH):* Rs.{levels['PDH']}\n"
-                f"• *Previous Day Low (PDL):* Rs.{levels['PDL']}"
+                f"📊 *NIFTY SCALPING LIVE FEED (9:05 AM)*\n\n"
+                f"• *Current Spot:* Rs.{c_spot}\n"
+                f"• *Strategy:* 1-Min Scalping (EMA + RSI + Supertrend)"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -270,14 +309,11 @@ def process_market_cycle(state):
     if 10 <= now_ist.hour <= 15:
         if state.get("last_hourly_alert_hour") != now_ist.hour:
             c_spot = round(float(df.iloc[-1]["Close"]), 2)
-            c_high_day = round(float(df["High"].max()), 2)
-            c_low_day = round(float(df["Low"].min()), 2)
-
             active = state.get("active_trade")
             if active:
                 trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['sl'])})"
             else:
-                trade_info = "None (Waiting for Setup)"
+                trade_info = "None (Scanning 1-Min Setup)"
 
             trades_cnt = 0
             if os.path.exists(HISTORY_FILE):
@@ -289,31 +325,26 @@ def process_market_cycle(state):
                     pass
 
             hourly_msg = (
-                f"⏱ *HOURLY SYSTEM & MARKET UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (2-Min PDH/PDL Strategy)\n"
-                f"📈 *Nifty Current Spot:* Rs.{c_spot}\n"
-                f"📊 *Session High / Low:* Rs.{c_high_day} / Rs.{c_low_day}\n\n"
+                f"⏱ *HOURLY SCALPING UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
+                f"🟢 *Bot Health:* Active (1-Min Scalping)\n"
+                f"📈 *Nifty Spot:* Rs.{c_spot}\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
-                f"📑 *Today's Trades Closed:* {trades_cnt}\n"
-                f"🎯 *Key Levels:* PDH: Rs.{levels['PDH']} | PDL: Rs.{levels['PDL']}"
+                f"📑 *Today's Scalps Closed:* {trades_cnt}"
             )
             send_telegram(hourly_msg, target="admin")
             state["last_hourly_alert_hour"] = now_ist.hour
             save_state(state)
 
-    if dtime(9, 30) <= curr_time <= dtime(15, 0):
-        high_low = df["High"] - df["Low"]
-        high_close = np.abs(df["High"] - df["Close"].shift())
-        low_close = np.abs(df["Low"] - df["Close"].shift())
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        df["ATR"] = tr.rolling(14).mean()
-
+    if dtime(9, 15) <= curr_time <= dtime(15, 0):
         candle = df.iloc[-1]
-        prior = df.iloc[-2]
         c_close = float(candle["Close"])
         c_high = float(candle["High"])
         c_low = float(candle["Low"])
-        c_atr = float(candle["ATR"])
+        c_atr = float(candle["ATR"]) if not np.isnan(candle["ATR"]) else 15.0
+        c_ema9 = float(candle["EMA9"])
+        c_ema21 = float(candle["EMA21"])
+        c_rsi = float(candle["RSI"]) if not np.isnan(candle["RSI"]) else 50.0
+        c_st = bool(candle["Supertrend"])
 
         active = state.get("active_trade")
 
@@ -323,9 +354,9 @@ def process_market_cycle(state):
                     active["t1_hit"] = True
                     active["sl_active"] = False
                     msg = (
-                        f"🎯 *TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
-                        f"• Trade Secured: **Stop Loss Removed Completely**.\n"
-                        f"• Trailing for Target 2 (Rs.{active['t2']}) & Target 3 (Rs.{active['t3']})."
+                        f"🎯 *SCALP TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
+                        f"• Trade Secured: **Stop Loss Removed**.\n"
+                        f"• Trailing for T2 (Rs.{active['t2']}) & T3 (Rs.{active['t3']})."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
@@ -333,7 +364,7 @@ def process_market_cycle(state):
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["t2"]) or (active["action"] == "SELL" and c_low <= active["t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *TARGET 2 (T2) ACHIEVED! [Rs.{active['t2']}]*\nTrail stops to lock profit.", target="all")
+                    send_telegram(f"🚀 *SCALP TARGET 2 (T2) ACHIEVED! [Rs.{active['t2']}]*", target="all")
                     save_state(state)
 
             if active["t2_hit"] and not active["t3_hit"]:
@@ -341,7 +372,7 @@ def process_market_cycle(state):
                     active["t3_hit"] = True
                     exit_price = active["t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT! [Rs.{exit_price}]*\nExit full position.", target="all")
+                    send_telegram(f"🏆 *SCALP FINAL TARGET 3 (T3) HIT! [Rs.{exit_price}]*", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -358,7 +389,7 @@ def process_market_cycle(state):
                 if sl_hit:
                     exit_price = active["sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *STOP LOSS HIT! [Rs.{exit_price}]*\nExit trade.", target="all")
+                    send_telegram(f"🛑 *SCALP STOP LOSS HIT! [Rs.{exit_price}]*", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -369,11 +400,11 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # PDH / PDL Breakout Signal Scan
+        # Scalping Entry Signals (EMA 9 > 21 + Supertrend Bullish + RSI > 55 for BUY)
         new_signal = None
-        if float(prior["Close"]) <= levels["PDH"] and c_close > levels["PDH"]:
+        if c_ema9 > c_ema21 and c_st and c_rsi > 52:
             new_signal = "BUY"
-        elif float(prior["Close"]) >= levels["PDL"] and c_close < levels["PDL"]:
+        elif c_ema9 < c_ema21 and not c_st and c_rsi < 48:
             new_signal = "SELL"
 
         if new_signal:
@@ -381,11 +412,11 @@ def process_market_cycle(state):
                 if active["t1_hit"]:
                     exit_price = c_close
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *NEW SIGNAL RECEIVED:* Exit previous running trade at Rs.{exit_price} and switch position.", target="all")
+                    send_telegram(f"🔄 *NEW SCALP SIGNAL:* Exit previous trade at Rs.{exit_price} and switch position.", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Switched on New Signal",
+                        "pnl_points": pnl, "reason": "Switched on New Scalp Signal",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -400,28 +431,19 @@ def process_market_cycle(state):
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
             
-            if active.get("t2_hit"):
-                status_str = "Target 1 & Target 2 Achieved (Pending T3 Closed)"
-            elif active.get("t1_hit"):
-                status_str = "Target 1 Achieved (Pending T2/T3 Closed)"
-            else:
-                status_str = "Running (No Targets Hit)"
-
-            pnl_str = f"{'+' if pnl > 0 else ''}{round(pnl, 2)} pts"
             sq_msg = (
                 f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
                 f"• *Position:* {active['action']} NIFTY\n"
-                f"• *Status:* {status_str}\n"
                 f"• *Entry Price:* Rs.{active['entry']}\n"
                 f"• *Exit Price:* Rs.{exit_price}\n"
-                f"• *PnL:* {pnl_str}"
+                f"• *PnL:* {'+' if pnl > 0 else ''}{round(pnl, 2)} pts"
             )
             send_telegram(sq_msg, target="all")
             
             log_trade({
                 "date": today_str, "action": active["action"],
                 "entry": active["entry"], "exit": exit_price,
-                "pnl_points": pnl, "reason": f"Intraday Close ({status_str})",
+                "pnl_points": pnl, "reason": "Intraday Close (3:20 PM)",
                 "exit_time": now_ist.strftime("%H:%M")
             })
             state["active_trade"] = None
@@ -441,14 +463,14 @@ def process_market_cycle(state):
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
                 pdf_filename,
-                f"SAS LEVEL TRACKER - DAILY REPORT",
+                f"SAS LEVEL TRACKER - DAILY SCALPING REPORT",
                 f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
                 today_trades
             )
             send_email_with_attachment(
                 pdf_filename,
                 f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
-                f"Hello Admin,\n\nPlease find attached the Daily P&L Report for {today_str}."
+                f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
             )
             net_pts = sum(t["pnl_points"] for t in today_trades)
             send_telegram(
@@ -499,7 +521,7 @@ def process_market_cycle(state):
             save_state(state)
 
 def trigger_entry(action, price, atr, now_ist, state):
-    sl_dist = max(round(1.2 * atr, 1), 22.0)
+    sl_dist = max(round(1.0 * atr, 1), 15.0) # Tighter SL for scalping
     t1_dist = round(sl_dist * 1.0, 1)
     t2_dist = round(sl_dist * 1.8, 1)
     t3_dist = round(sl_dist * 2.8, 1)
@@ -519,7 +541,7 @@ def trigger_entry(action, price, atr, now_ist, state):
         strike = f"{round(entry / 50.0) * 50} PE"
 
     msg = (
-        f"⚡ *NEW INTRADAY SIGNAL (2-Min PDH/PDL)*\n\n"
+        f"⚡ *NEW SCALPING SIGNAL (1-Min)*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
         f"• *Entry Price:* Rs.{entry}\n"
@@ -540,7 +562,7 @@ def trigger_entry(action, price, atr, now_ist, state):
     save_state(state)
 
 def main():
-    print("Starting SAS LEVEL TRACKER Service...")
+    print("Starting SAS LEVEL TRACKER Scalping Service...")
     
     now_ist = datetime.now(IST)
     today_str = now_ist.strftime("%Y-%m-%d")
@@ -570,7 +592,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 2-Minute PDH/PDL Breakout Scanner Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* 1-Minute Scalping Bot Active.", target="admin")
 
     state = load_state()
 
