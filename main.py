@@ -353,7 +353,6 @@ def process_market_cycle(state):
                     active["sl_active"] = False
                     msg = (
                         f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
-                        f"• Spot T1 Hit (Rs.{active['spot_t1']})\n"
                         f"• Option T1 Hit: **Approx Rs.{active['opt_t1']}**\n"
                         f"• Trade Secured: **Stop Loss Removed**."
                     )
@@ -363,7 +362,7 @@ def process_market_cycle(state):
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Spot T2 Hit (Rs.{active['spot_t2']})\n• Option T2 Hit: **Approx Rs.{active['opt_t2']}**", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Option T2 Hit: **Approx Rs.{active['opt_t2']}**", target="all")
                     save_state(state)
 
             if active["t2_hit"] and not active["t3_hit"]:
@@ -371,7 +370,7 @@ def process_market_cycle(state):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit (Rs.{active['spot_t3']})\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -388,7 +387,7 @@ def process_market_cycle(state):
                 if sl_hit:
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Spot SL Hit (Rs.{active['spot_sl']})\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -459,7 +458,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date") == today_str]
+            today_trades = [t for t in all_trades if t.get("date"] == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
@@ -559,19 +558,18 @@ def trigger_entry(action, price, atr, now_ist, state):
     msg = (
         f"⚡ *SAS ALERT*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
-        f"• *Action:* *{action}*\n"
-        f"• *Nifty Spot Entry:* Rs.{entry}\n\n"
-        f"📌 *NIFTY SPOT TARGETS & SL:*\n"
-        f"• *Spot T1:* Rs.{spot_t1}\n"
-        f"• *Spot T2:* Rs.{spot_t2}\n"
-        f"• *Spot T3:* Rs.{spot_t3}\n"
-        f"• *Spot SL:* Rs.{spot_sl}\n\n"
-        f"🟢 *OPTION PREMIUM TARGETS (Approx):*\n"
-        f"• *Opt Buy Rate:* ~Rs.{opt_entry}\n"
-        f"• *Opt T1:* ~Rs.{opt_t1}\n"
-        f"• *Opt T2:* ~Rs.{opt_t2}\n"
-        f"• *Opt T3:* ~Rs.{opt_t3}\n"
-        f"• *Opt SL:* ~Rs.{opt_sl}\n"
+        f"• *Action:* *{action}*\n\n"
+        f"🟢 *OPTION DETAILS:*\n"
+        f"• *Option Strike:* `{strike}`\n"
+        f"• *Option Price (Buy Rate):* ~Rs.{opt_entry}\n"
+        f"• *Option Target 1 (T1):* ~Rs.{opt_t1}\n"
+        f"• *Option Target 2 (T2):* ~Rs.{opt_t2}\n"
+        f"• *Option Target 3 (T3):* ~Rs.{opt_t3}\n"
+        f"• *Option Stop Loss (SL):* ~Rs.{opt_sl}\n\n"
+        f"📌 *NIFTY SPOT REFERENCE:*\n"
+        f"• *Spot Entry:* Rs.{entry}\n"
+        f"• *Spot T1:* Rs.{spot_t1} | *T2:* Rs.{spot_t2} | *T3:* Rs.{spot_t3}\n"
+        f"• *Spot SL:* Rs.{spot_sl}\n"
         f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
     )
     send_telegram(msg, target="all")
