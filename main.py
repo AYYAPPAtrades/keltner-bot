@@ -227,19 +227,17 @@ def send_email_with_attachment(pdf_path, subject, body_text):
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# ================= 7. SCALPING INDICATORS (EMA, RSI, SUPERTREND) =================
+# ================= 7. SCALPING INDICATORS =================
 def calculate_indicators(df):
     df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
     df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
 
-    # RSI 14
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # Supertrend
     hl2 = (df["High"] + df["Low"]) / 2
     high_low = df["High"] - df["Low"]
     high_close = np.abs(df["High"] - df["Close"].shift())
@@ -311,7 +309,7 @@ def process_market_cycle(state):
             c_spot = round(float(df.iloc[-1]["Close"]), 2)
             active = state.get("active_trade")
             if active:
-                trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['sl'])})"
+                trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['spot_sl'])})"
             else:
                 trade_info = "None (Scanning 1-Min Setup)"
 
@@ -320,7 +318,7 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
                 except Exception:
                     pass
 
@@ -335,7 +333,7 @@ def process_market_cycle(state):
             state["last_hourly_alert_hour"] = now_ist.hour
             save_state(state)
 
-    if dtime(9, 15) <= curr_time <= dtime(15, 0):
+    if dtime(9, 15) <= curr_time <= dtime(15, 20):
         candle = df.iloc[-1]
         c_close = float(candle["Close"])
         c_high = float(candle["High"])
@@ -350,29 +348,30 @@ def process_market_cycle(state):
 
         if active is not None:
             if not active["t1_hit"]:
-                if (active["action"] == "BUY" and c_high >= active["t1"]) or (active["action"] == "SELL" and c_low <= active["t1"]):
+                if (active["action"] == "BUY" and c_high >= active["spot_t1"]) or (active["action"] == "SELL" and c_low <= active["spot_t1"]):
                     active["t1_hit"] = True
                     active["sl_active"] = False
                     msg = (
-                        f"🎯 *SCALP TARGET 1 (T1) ACHIEVED! [Rs.{active['t1']}]*\n\n"
-                        f"• Trade Secured: **Stop Loss Removed**.\n"
-                        f"• Trailing for T2 (Rs.{active['t2']}) & T3 (Rs.{active['t3']})."
+                        f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
+                        f"• Spot T1 Hit (Rs.{active['spot_t1']})\n"
+                        f"• Option T1 Hit: **Approx Rs.{active['opt_t1']}**\n"
+                        f"• Trade Secured: **Stop Loss Removed**."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
 
             if active["t1_hit"] and not active["t2_hit"]:
-                if (active["action"] == "BUY" and c_high >= active["t2"]) or (active["action"] == "SELL" and c_low <= active["t2"]):
+                if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SCALP TARGET 2 (T2) ACHIEVED! [Rs.{active['t2']}]*", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Spot T2 Hit (Rs.{active['spot_t2']})\n• Option T2 Hit: **Approx Rs.{active['opt_t2']}**", target="all")
                     save_state(state)
 
             if active["t2_hit"] and not active["t3_hit"]:
-                if (active["action"] == "BUY" and c_high >= active["t3"]) or (active["action"] == "SELL" and c_low <= active["t3"]):
+                if (active["action"] == "BUY" and c_high >= active["spot_t3"]) or (active["action"] == "SELL" and c_low <= active["spot_t3"]):
                     active["t3_hit"] = True
-                    exit_price = active["t3"]
+                    exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SCALP FINAL TARGET 3 (T3) HIT! [Rs.{exit_price}]*", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit (Rs.{active['spot_t3']})\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -385,11 +384,11 @@ def process_market_cycle(state):
                     return
 
             if active["sl_active"]:
-                sl_hit = (active["action"] == "BUY" and c_low <= active["sl"]) or (active["action"] == "SELL" and c_high >= active["sl"])
+                sl_hit = (active["action"] == "BUY" and c_low <= active["spot_sl"]) or (active["action"] == "SELL" and c_high >= active["spot_sl"])
                 if sl_hit:
-                    exit_price = active["sl"]
+                    exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SCALP STOP LOSS HIT! [Rs.{exit_price}]*", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Spot SL Hit (Rs.{active['spot_sl']})\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -400,7 +399,7 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Scalping Entry Signals (EMA 9 > 21 + Supertrend Bullish + RSI > 55 for BUY)
+        # Scalping Entry Signals with Trend Reversal Logic
         new_signal = None
         if c_ema9 > c_ema21 and c_st and c_rsi > 52:
             new_signal = "BUY"
@@ -409,14 +408,14 @@ def process_market_cycle(state):
 
         if new_signal:
             if active is not None:
-                if active["t1_hit"]:
+                if active["action"] != new_signal:
                     exit_price = c_close
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *NEW SCALP SIGNAL:* Exit previous trade at Rs.{exit_price} and switch position.", target="all")
+                    send_telegram(f"🔄 *SAS ALERT: TREND REVERSAL ({new_signal}):* Exit previous `{active['action']}` trade at Rs.{exit_price} and switch position.", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Switched on New Scalp Signal",
+                        "pnl_points": pnl, "reason": f"Trend Reversal to {new_signal}",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -425,14 +424,15 @@ def process_market_cycle(state):
             else:
                 trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
-    if dtime(15, 20) <= curr_time < dtime(15, 30):
+    # 3:20 PM Auto Square Off
+    if dtime(15, 20) <= curr_time < dtime(15, 25):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
             
             sq_msg = (
-                f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
+                f"⏰ *SAS ALERT: INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
                 f"• *Position:* {active['action']} NIFTY\n"
                 f"• *Entry Price:* Rs.{active['entry']}\n"
                 f"• *Exit Price:* Rs.{exit_price}\n"
@@ -449,7 +449,8 @@ def process_market_cycle(state):
             state["active_trade"] = None
             save_state(state)
 
-    if dtime(15, 45) <= curr_time < dtime(15, 55):
+    # 3:25 PM Daily P&L PDF Report & Email
+    if dtime(15, 25) <= curr_time < dtime(15, 30):
         if not state.get("daily_report_sent_today"):
             all_trades = []
             if os.path.exists(HISTORY_FILE):
@@ -474,7 +475,7 @@ def process_market_cycle(state):
             )
             net_pts = sum(t["pnl_points"] for t in today_trades)
             send_telegram(
-                f"📄 *DAILY P&L REPORT (3:45 PM)*\n\n"
+                f"📄 *SAS ALERT: DAILY P&L REPORT (3:25 PM)*\n\n"
                 f"• *Date:* {today_str}\n"
                 f"• *Trades Executed:* {len(today_trades)}\n"
                 f"• *Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
@@ -484,7 +485,8 @@ def process_market_cycle(state):
             state["daily_report_sent_today"] = True
             save_state(state)
 
-    if dtime(15, 45) <= curr_time < dtime(15, 55):
+    # 3:30 PM Monthly Expiry Detailed P&L Report
+    if dtime(15, 30) <= curr_time < dtime(15, 35):
         if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
             all_cycle_trades = []
             if os.path.exists(HISTORY_FILE):
@@ -509,7 +511,7 @@ def process_market_cycle(state):
             )
             total_cycle_pts = sum(t["pnl_points"] for t in all_cycle_trades)
             send_telegram(
-                f"🏆 *MONTHLY EXPIRY-TO-EXPIRY REPORT (3:45 PM)*\n\n"
+                f"🏆 *SAS ALERT: MONTHLY EXPIRY REPORT (3:30 PM)*\n\n"
                 f"Today marks the Monthly Expiry Day!\n"
                 f"• *Total Cycle Trades:* {len(all_cycle_trades)}\n"
                 f"• *Total Cycle Net P&L:* {'+' if total_cycle_pts > 0 else ''}{round(total_cycle_pts, 2)} Pts\n"
@@ -521,41 +523,63 @@ def process_market_cycle(state):
             save_state(state)
 
 def trigger_entry(action, price, atr, now_ist, state):
-    sl_dist = max(round(1.0 * atr, 1), 15.0) # Tighter SL for scalping
+    sl_dist = max(round(1.0 * atr, 1), 15.0)
     t1_dist = round(sl_dist * 1.0, 1)
     t2_dist = round(sl_dist * 1.8, 1)
     t3_dist = round(sl_dist * 2.8, 1)
 
     entry = round(price, 2)
+    atm_strike = round(entry / 50.0) * 50
+    
     if action == "BUY":
-        sl = round(entry - sl_dist, 2)
-        t1 = round(entry + t1_dist, 2)
-        t2 = round(entry + t2_dist, 2)
-        t3 = round(entry + t3_dist, 2)
-        strike = f"{round(entry / 50.0) * 50} CE"
+        spot_sl = round(entry - sl_dist, 2)
+        spot_t1 = round(entry + t1_dist, 2)
+        spot_t2 = round(entry + t2_dist, 2)
+        spot_t3 = round(entry + t3_dist, 2)
+        strike = f"{atm_strike} CE"
+        
+        opt_entry = round(entry * 0.035, 1)
+        opt_t1 = round(opt_entry + (t1_dist * 0.5), 1)
+        opt_t2 = round(opt_entry + (t2_dist * 0.5), 1)
+        opt_t3 = round(opt_entry + (t3_dist * 0.5), 1)
+        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 5.0)
     else:
-        sl = round(entry + sl_dist, 2)
-        t1 = round(entry - t1_dist, 2)
-        t2 = round(entry - t2_dist, 2)
-        t3 = round(entry - t3_dist, 2)
-        strike = f"{round(entry / 50.0) * 50} PE"
+        spot_sl = round(entry + sl_dist, 2)
+        spot_t1 = round(entry - t1_dist, 2)
+        spot_t2 = round(entry - t2_dist, 2)
+        spot_t3 = round(entry - t3_dist, 2)
+        strike = f"{atm_strike} PE"
+
+        opt_entry = round(entry * 0.035, 1)
+        opt_t1 = round(opt_entry + (t1_dist * 0.5), 1)
+        opt_t2 = round(opt_entry + (t2_dist * 0.5), 1)
+        opt_t3 = round(opt_entry + (t3_dist * 0.5), 1)
+        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 5.0)
 
     msg = (
-        f"⚡ *NEW SCALPING SIGNAL (1-Min)*\n\n"
+        f"⚡ *SAS ALERT*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
         f"• *Action:* *{action}*\n"
-        f"• *Entry Price:* Rs.{entry}\n"
-        f"• *Target 1 (T1):* Rs.{t1}\n"
-        f"• *Target 2 (T2):* Rs.{t2}\n"
-        f"• *Target 3 (T3):* Rs.{t3}\n"
-        f"• *Stop Loss (SL):* Rs.{sl}\n"
+        f"• *Nifty Spot Entry:* Rs.{entry}\n\n"
+        f"📌 *NIFTY SPOT TARGETS & SL:*\n"
+        f"• *Spot T1:* Rs.{spot_t1}\n"
+        f"• *Spot T2:* Rs.{spot_t2}\n"
+        f"• *Spot T3:* Rs.{spot_t3}\n"
+        f"• *Spot SL:* Rs.{spot_sl}\n\n"
+        f"🟢 *OPTION PREMIUM TARGETS (Approx):*\n"
+        f"• *Opt Buy Rate:* ~Rs.{opt_entry}\n"
+        f"• *Opt T1:* ~Rs.{opt_t1}\n"
+        f"• *Opt T2:* ~Rs.{opt_t2}\n"
+        f"• *Opt T3:* ~Rs.{opt_t3}\n"
+        f"• *Opt SL:* ~Rs.{opt_sl}\n"
         f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
     )
     send_telegram(msg, target="all")
 
     state["active_trade"] = {
         "action": action, "entry": entry,
-        "t1": t1, "t2": t2, "t3": t3, "sl": sl,
+        "spot_t1": spot_t1, "spot_t2": spot_t2, "spot_t3": spot_t3, "spot_sl": spot_sl,
+        "opt_entry": opt_entry, "opt_t1": opt_t1, "opt_t2": opt_t2, "opt_t3": opt_t3, "opt_sl": opt_sl,
         "t1_hit": False, "t2_hit": False, "t3_hit": False,
         "sl_active": True, "entry_time": now_ist.strftime("%H:%M")
     }
