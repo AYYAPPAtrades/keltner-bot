@@ -353,6 +353,7 @@ def process_market_cycle(state):
                     active["sl_active"] = False
                     msg = (
                         f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
+                        f"• Spot T1 Hit (Rs.{active['spot_t1']})\n"
                         f"• Option T1 Hit: **Approx Rs.{active['opt_t1']}**\n"
                         f"• Trade Secured: **Stop Loss Removed**."
                     )
@@ -362,7 +363,7 @@ def process_market_cycle(state):
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Option T2 Hit: **Approx Rs.{active['opt_t2']}**", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Spot T2 Hit (Rs.{active['spot_t2']})\n• Option T2 Hit: **Approx Rs.{active['opt_t2']}**", target="all")
                     save_state(state)
 
             if active["t2_hit"] and not active["t3_hit"]:
@@ -370,7 +371,7 @@ def process_market_cycle(state):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit (Rs.{active['spot_t3']})\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -387,7 +388,7 @@ def process_market_cycle(state):
                 if sl_hit:
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Spot SL Hit (Rs.{active['spot_sl']})\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -529,9 +530,7 @@ def trigger_entry(action, price, atr, now_ist, state):
 
     entry = round(price, 2)
     atm_strike = round(entry / 50.0) * 50
-    
-    # Realistic Intraday Nifty Option Premium (Standard ATM ~Rs. 130 - 160 range for scalping)
-    opt_entry = 145.0 
+    opt_entry = 145.0  # Standard ATM Option Premium for scalping
 
     if action == "BUY":
         spot_sl = round(entry - sl_dist, 2)
@@ -569,9 +568,11 @@ def trigger_entry(action, price, atr, now_ist, state):
         f"• *Option Target 2 (T2):* ~Rs.{opt_t2}\n"
         f"• *Option Target 3 (T3):* ~Rs.{opt_t3}\n"
         f"• *Option Stop Loss (SL):* ~Rs.{opt_sl}\n\n"
-        f"📌 *NIFTY SPOT REFERENCE:*\n"
+        f"📌 *NIFTY SPOT REFERENCE & TARGETS:*\n"
         f"• *Spot Entry:* Rs.{entry}\n"
-        f"• *Spot T1:* Rs.{spot_t1} | *T2:* Rs.{spot_t2} | *T3:* Rs.{spot_t3}\n"
+        f"• *Spot T1:* Rs.{spot_t1}\n"
+        f"• *Spot T2:* Rs.{spot_t2}\n"
+        f"• *Spot T3:* Rs.{spot_t3}\n"
         f"• *Spot SL:* Rs.{spot_sl}\n"
         f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
     )
