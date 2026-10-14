@@ -318,7 +318,7 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
                 except Exception:
                     pass
 
