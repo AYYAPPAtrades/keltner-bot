@@ -530,35 +530,38 @@ def trigger_entry(action, price, atr, now_ist, state):
     entry = round(price, 2)
     atm_strike = round(entry / 50.0) * 50
     
+    # Realistic Intraday Nifty Option Premium (Standard ATM ~Rs. 130 - 160 range for scalping)
+    opt_entry = 145.0 
+
     if action == "BUY":
         spot_sl = round(entry - sl_dist, 2)
         spot_t1 = round(entry + t1_dist, 2)
         spot_t2 = round(entry + t2_dist, 2)
         spot_t3 = round(entry + t3_dist, 2)
         strike = f"{atm_strike} CE"
-        
-        opt_entry = round(entry * 0.035, 1)
-        opt_t1 = round(opt_entry + (t1_dist * 0.5), 1)
-        opt_t2 = round(opt_entry + (t2_dist * 0.5), 1)
-        opt_t3 = round(opt_entry + (t3_dist * 0.5), 1)
-        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 5.0)
+        icon = "🟢"
+
+        opt_t1 = round(opt_entry + (t1_dist * 0.6), 1)
+        opt_t2 = round(opt_entry + (t2_dist * 0.6), 1)
+        opt_t3 = round(opt_entry + (t3_dist * 0.6), 1)
+        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 10.0)
     else:
         spot_sl = round(entry + sl_dist, 2)
         spot_t1 = round(entry - t1_dist, 2)
         spot_t2 = round(entry - t2_dist, 2)
         spot_t3 = round(entry - t3_dist, 2)
         strike = f"{atm_strike} PE"
+        icon = "🔴"
 
-        opt_entry = round(entry * 0.035, 1)
-        opt_t1 = round(opt_entry + (t1_dist * 0.5), 1)
-        opt_t2 = round(opt_entry + (t2_dist * 0.5), 1)
-        opt_t3 = round(opt_entry + (t3_dist * 0.5), 1)
-        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 5.0)
+        opt_t1 = round(opt_entry + (t1_dist * 0.6), 1)
+        opt_t2 = round(opt_entry + (t2_dist * 0.6), 1)
+        opt_t3 = round(opt_entry + (t3_dist * 0.6), 1)
+        opt_sl = max(round(opt_entry - (sl_dist * 0.5), 1), 10.0)
 
     msg = (
         f"⚡ *SAS ALERT*\n\n"
         f"• *Instrument:* NIFTY 50 (`{strike}`)\n"
-        f"• *Action:* *{action}*\n\n"
+        f"• *Action:* {icon} *{action}*\n\n"
         f"🟢 *OPTION DETAILS:*\n"
         f"• *Option Strike:* `{strike}`\n"
         f"• *Option Price (Buy Rate):* ~Rs.{opt_entry}\n"
