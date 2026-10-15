@@ -5,6 +5,7 @@ import time
 import smtplib
 import calendar
 import requests
+import subprocess
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -118,7 +119,22 @@ def send_telegram(text: str, target="admin"):
         except Exception as e:
             print(f"Telegram Channel Error: {e}")
 
-# ================= 5. STATE & CRASH BACKUP =================
+def send_telegram_document(pdf_path, caption_text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    for chat_id in [ADMIN_CHAT_ID, CHANNEL_CHAT_ID]:
+        if chat_id and not chat_id.startswith("-100XX"):
+            try:
+                with open(pdf_path, "rb") as doc:
+                    requests.post(
+                        url,
+                        data={"chat_id": chat_id, "caption": caption_text, "parse_mode": "Markdown"},
+                        files={"document": doc},
+                        timeout=30
+                    )
+            except Exception as e:
+                print(f"Telegram PDF Document Error for {chat_id}: {e}")
+
+# ================= 5. STATE & GITHUB AUTO-COMMIT =================
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -139,6 +155,17 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
+def git_commit_push(filename):
+    try:
+        subprocess.run(["git", "config", "--global", "user.email", "bot@github.com"], check=True)
+        subprocess.run(["git", "config", "--global", "user.name", "SAS Trading Bot"], check=True)
+        subprocess.run(["git", "add", filename], check=True)
+        subprocess.run(["git", "commit", "-m", f"Auto-backup: update {filename}"], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print(f"Successfully committed and pushed {filename} to GitHub.")
+    except Exception as e:
+        print(f"Git auto-commit failed: {e}")
+
 def log_trade(trade_record):
     trades = []
     if os.path.exists(HISTORY_FILE):
@@ -150,11 +177,13 @@ def log_trade(trade_record):
     trades.append(trade_record)
     with open(HISTORY_FILE, "w") as f:
         json.dump(trades, f, indent=4)
+    git_commit_push(HISTORY_FILE)
 
 def clear_expiry_cycle_trades():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "w") as f:
             json.dump([], f)
+    git_commit_push(HISTORY_FILE)
 
 # ================= 6. PDF & EMAIL REPORT =================
 def generate_pdf_report(filename, title, subtitle, trades):
@@ -167,38 +196,48 @@ def generate_pdf_report(filename, title, subtitle, trades):
     elements.append(Paragraph(subtitle, styles["Normal"]))
     elements.append(Spacer(1, 15))
 
-    table_data = [["Date", "Signal", "Entry Price", "Exit Price", "P&L (Points)", "Reason", "Time"]]
-    total_points = 0.0
+    table_data = [["Date", "Signal", "Spot Entry", "Spot Exit", "Spot P&L", "Opt Entry", "Opt Exit", "Opt P&L", "Reason", "Time"]]
+    total_spot_pts = 0.0
+    total_opt_pts = 0.0
 
     if not trades:
-        table_data.append(["-", "No Trades Recorded", "-", "-", "-", "-", "-"])
+        table_data.append(["-", "No Trades", "-", "-", "-", "-", "-", "-", "-", "-"])
     else:
         for t in trades:
-            pts = round(t["pnl_points"], 2)
-            total_points += pts
+            s_pts = round(t.get("spot_pnl", t.get("pnl_points", 0.0)), 2)
+            o_pts = round(t.get("opt_pnl", 0.0), 2)
+            total_spot_pts += s_pts
+            total_opt_pts += o_pts
             table_data.append([
                 t.get("date", "-"),
                 t["action"],
                 f"Rs.{t['entry']}",
                 f"Rs.{t['exit']}",
-                f"{'+' if pts > 0 else ''}{pts}",
+                f"{'+' if s_pts > 0 else ''}{s_pts}",
+                f"Rs.{t.get('opt_entry', '-')}",
+                f"Rs.{t.get('opt_exit', '-')}",
+                f"{'+' if o_pts > 0 else ''}{o_pts}",
                 t["reason"],
                 t["exit_time"]
             ])
 
-    t = Table(table_data, colWidths=[70, 60, 80, 80, 85, 120, 60])
+    t = Table(table_data, colWidths=[60, 50, 65, 65, 65, 65, 65, 65, 80, 50])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2B6CB0")),
         ("TEXTCOLOR", (0,0), (-1,0), colors.whitesmoke),
         ("ALIGN", (0,0), (-1,-1), "CENTER"),
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
         ("GRID", (0,0), (-1,-1), 1, colors.HexColor("#CBD5E0")),
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F7FAFC")]),
     ]))
     elements.append(t)
-    elements.append(Spacer(1, 20))
+    elements.append(Spacer(1, 15))
 
-    summary_text = f"<b>Net Cumulative P&L:</b> {'+' if total_points > 0 else ''}{round(total_points, 2)} Points"
+    summary_text = (
+        f"<b>Spot Net Cumulative P&L:</b> {'+' if total_spot_pts > 0 else ''}{round(total_spot_pts, 2)} Points<br/>"
+        f"<b>Option Net Cumulative P&L:</b> {'+' if total_opt_pts > 0 else ''}{round(total_opt_pts, 2)} Points"
+    )
     elements.append(Paragraph(summary_text, styles["Heading2"]))
     doc.build(elements)
     return filename
@@ -306,7 +345,7 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
                 except Exception:
                     pass
 
@@ -357,13 +396,17 @@ def process_market_cycle(state):
                 if (active["action"] == "BUY" and c_high >= active["spot_t3"]) or (active["action"] == "SELL" and c_low <= active["spot_t3"]):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    spot_pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    opt_pnl = (active["opt_t3"] - active["opt_entry"]) if active["action"] == "BUY" else (active["opt_entry"] - active["opt_t3"])
+                    
                     send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Option T3 Hit: **Approx Rs.{active['opt_t3']}**", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Target 3 Achieved",
+                        "spot_pnl": spot_pnl, "opt_entry": active["opt_entry"],
+                        "opt_exit": active["opt_t3"], "opt_pnl": opt_pnl,
+                        "pnl_points": spot_pnl, "reason": "Target 3 Achieved",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -374,12 +417,16 @@ def process_market_cycle(state):
                 sl_hit = (active["action"] == "BUY" and c_low <= active["spot_sl"]) or (active["action"] == "SELL" and c_high >= active["spot_sl"])
                 if sl_hit:
                     exit_price = active["spot_sl"]
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    spot_pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    opt_pnl = (active["opt_sl"] - active["opt_entry"]) if active["action"] == "BUY" else (active["opt_entry"] - active["opt_sl"])
+                    
                     send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Option SL Hit: **Approx Rs.{active['opt_sl']}**", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Stop Loss Hit",
+                        "spot_pnl": spot_pnl, "opt_entry": active["opt_entry"],
+                        "opt_exit": active["opt_sl"], "opt_pnl": opt_pnl,
+                        "pnl_points": spot_pnl, "reason": "Stop Loss Hit",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -397,12 +444,27 @@ def process_market_cycle(state):
             if active is not None:
                 if active["action"] != new_signal:
                     exit_price = c_close
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *SAS ALERT: TREND REVERSAL ({new_signal}):* Exit previous `{active['action']}` trade at Rs.{exit_price} and switch position.", target="all")
+                    
+                    # LOGIC: If T1 was already hit before reversal, lock profit at T1 minimum!
+                    if active["t1_hit"]:
+                        exit_price = active["spot_t1"]
+                        opt_exit_price = active["opt_t1"]
+                        reason_str = "Trend Reversal (Secured at T1)"
+                    else:
+                        opt_exit_approx = round(active["opt_entry"] + ((exit_price - active["entry"]) * 0.6 if active["action"] == "BUY" else (active["entry"] - exit_price) * 0.6), 1)
+                        opt_exit_price = opt_exit_approx
+                        reason_str = f"Trend Reversal to {new_signal}"
+
+                    spot_pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    opt_pnl = (opt_exit_price - active["opt_entry"]) if active["action"] == "BUY" else (active["opt_entry"] - opt_exit_price)
+                    
+                    send_telegram(f"🔄 *SAS ALERT: {reason_str}:* Exit previous `{active['action']}` trade at Rs.{exit_price} and switch position.", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": f"Trend Reversal to {new_signal}",
+                        "spot_pnl": spot_pnl, "opt_entry": active["opt_entry"],
+                        "opt_exit": opt_exit_price, "opt_pnl": opt_pnl,
+                        "pnl_points": spot_pnl, "reason": reason_str,
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -416,21 +478,36 @@ def process_market_cycle(state):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
-            pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+            
+            # LOGIC: If T1 was already hit before square off, lock profit at T1 minimum!
+            if active["t1_hit"]:
+                exit_price = active["spot_t1"]
+                opt_exit_price = active["opt_t1"]
+                reason_str = "Intraday Close (Secured at T1)"
+            else:
+                opt_exit_approx = round(active["opt_entry"] + ((exit_price - active["entry"]) * 0.6 if active["action"] == "BUY" else (active["entry"] - exit_price) * 0.6), 1)
+                opt_exit_price = opt_exit_approx
+                reason_str = "Intraday Close (3:20 PM)"
+
+            spot_pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+            opt_pnl = (opt_exit_price - active["opt_entry"]) if active["action"] == "BUY" else (active["opt_entry"] - opt_exit_price)
             
             sq_msg = (
                 f"⏰ *SAS ALERT: INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
                 f"• *Position:* {active['action']} NIFTY\n"
                 f"• *Entry Price:* Rs.{active['entry']}\n"
                 f"• *Exit Price:* Rs.{exit_price}\n"
-                f"• *PnL:* {'+' if pnl > 0 else ''}{round(pnl, 2)} pts"
+                f"• *Spot PnL:* {'+' if spot_pnl > 0 else ''}{round(spot_pnl, 2)} pts\n"
+                f"• *Opt PnL:* {'+' if opt_pnl > 0 else ''}{round(opt_pnl, 2)} pts"
             )
             send_telegram(sq_msg, target="all")
             
             log_trade({
                 "date": today_str, "action": active["action"],
                 "entry": active["entry"], "exit": exit_price,
-                "pnl_points": pnl, "reason": "Intraday Close (3:20 PM)",
+                "spot_pnl": spot_pnl, "opt_entry": active["opt_entry"],
+                "opt_exit": opt_exit_price, "opt_pnl": opt_pnl,
+                "pnl_points": spot_pnl, "reason": reason_str,
                 "exit_time": now_ist.strftime("%H:%M")
             })
             state["active_trade"] = None
@@ -446,13 +523,13 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date") == today_str]
+            today_trades = [t for t in all_trades if t.get("date"] == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
                 pdf_filename,
                 f"SAS LEVEL TRACKER - DAILY SCALPING REPORT",
-                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
+                f"<b>Date:</b> {today_str} | <b>Calculation:</b> T1 Secured / Entry to Exit",
                 today_trades
             )
             send_email_with_attachment(
@@ -460,15 +537,7 @@ def process_market_cycle(state):
                 f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
                 f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
             )
-            net_pts = sum(t["pnl_points"] for t in today_trades)
-            send_telegram(
-                f"📄 *SAS ALERT: DAILY P&L REPORT (3:25 PM)*\n\n"
-                f"• *Date:* {today_str}\n"
-                f"• *Trades Executed:* {len(today_trades)}\n"
-                f"• *Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
-                f"Verified PDF sent to Admin email ({ADMIN_EMAIL}).",
-                target="all"
-            )
+            send_telegram_document(pdf_filename, f"📄 *SAS ALERT: DAILY P&L REPORT ({today_str})*")
             state["daily_report_sent_today"] = True
             save_state(state)
 
@@ -496,15 +565,7 @@ def process_market_cycle(state):
                 f"SAS LEVEL TRACKER: Monthly Expiry-to-Expiry Report ({month_str})",
                 f"Hello Admin,\n\nToday is Monthly Expiry Day. Attached is the complete Expiry-to-Expiry performance log."
             )
-            total_cycle_pts = sum(t["pnl_points"] for t in all_cycle_trades)
-            send_telegram(
-                f"🏆 *SAS ALERT: MONTHLY EXPIRY REPORT (3:30 PM)*\n\n"
-                f"Today marks the Monthly Expiry Day!\n"
-                f"• *Total Cycle Trades:* {len(all_cycle_trades)}\n"
-                f"• *Total Cycle Net P&L:* {'+' if total_cycle_pts > 0 else ''}{round(total_cycle_pts, 2)} Pts\n"
-                f"Detailed Monthly P&L statement dispatched to Admin email.",
-                target="all"
-            )
+            send_telegram_document(monthly_pdf, f"🏆 *SAS ALERT: MONTHLY EXPIRY-TO-EXPIRY REPORT*")
             clear_expiry_cycle_trades()
             state["monthly_report_sent_today"] = True
             save_state(state)
@@ -581,10 +642,10 @@ def main():
     today_str = now_ist.strftime("%Y-%m-%d")
     weekday = now_ist.weekday()
 
-    # MANUAL FORCED REPORT CHECK (If run outside market hours, generates report immediately for testing)
+    # MANUAL / ON-DEMAND REPORT GENERATOR (Run anytime from GitHub Actions to get today's or monthly report)
     curr_time = now_ist.time()
     if curr_time > dtime(15, 35) or weekday >= 5 or today_str in NSE_HOLIDAYS_2026:
-        print("Market closed or post-market time. Generating manual report for today...")
+        print("Manual / Post-market execution. Generating PDF report...")
         all_trades = []
         if os.path.exists(HISTORY_FILE):
             try:
@@ -598,7 +659,7 @@ def main():
         generate_pdf_report(
             pdf_filename,
             f"SAS LEVEL TRACKER - DAILY SCALPING REPORT",
-            f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
+            f"<b>Date:</b> {today_str} | <b>Calculation:</b> T1 Secured / Entry to Exit",
             today_trades
         )
         send_email_with_attachment(
@@ -606,39 +667,19 @@ def main():
             f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
             f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
         )
-        net_pts = sum(t["pnl_points"] for t in today_trades)
-        send_telegram(
-            f"📄 *SAS ALERT: DAILY P&L REPORT (MANUAL TRIGGER)*\n\n"
-            f"• *Date:* {today_str}\n"
-            f"• *Trades Executed:* {len(today_trades)}\n"
-            f"• *Net P&L:* {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts\n"
-            f"Verified PDF sent to Admin email ({ADMIN_EMAIL}).",
-            target="all"
-        )
-        print("Manual report dispatched successfully. Exiting.")
+        send_telegram_document(pdf_filename, f"📄 *SAS ALERT: ON-DEMAND / DAILY P&L REPORT ({today_str})*")
+        print("On-demand report dispatched successfully. Exiting.")
         sys.exit(0)
 
     if weekday >= 5:
         day_name = "Saturday" if weekday == 5 else "Sunday"
-        send_telegram(
-            f"🏖️ *WEEKEND PAUSE ({day_name})*\n\n"
-            f"Market is closed today. Live scanner is inactive.\n"
-            f"Workflow stopped immediately to save minutes.",
-            target="admin"
-        )
-        print("Weekend detected. Workflow exited.")
+        send_telegram(f"🏖️ *WEEKEND PAUSE ({day_name})*\n\nMarket is closed today.", target="admin")
+        print("Weekend detected. Exiting.")
         sys.exit(0)
 
     if today_str in NSE_HOLIDAYS_2026:
         reason = NSE_HOLIDAYS_2026[today_str]
-        holiday_msg = (
-            f"🏖️ *MARKET HOLIDAY ALERT (NSE/BSE)*\n\n"
-            f"• *Date:* {today_str}\n"
-            f"• *Occasion:* *{reason}*\n"
-            f"• *Status:* Market is officially closed today.\n"
-            f"Live scanner and alerts are paused."
-        )
-        send_telegram(holiday_msg, target="all")
+        send_telegram(f"🏖️ *MARKET HOLIDAY:* {reason}", target="all")
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
