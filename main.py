@@ -514,7 +514,7 @@ def process_market_cycle(state):
             state["active_trade"] = None
             save_state(state)
 
-    # 3:25 PM Daily P&L PDF Report & Email (Sent to Admin & Channel Joiners)
+    # 3:25 PM Daily P&L PDF Report & Email (Automatic)
     if dtime(15, 25) <= curr_time < dtime(15, 30):
         if not state.get("daily_report_sent_today"):
             all_trades = []
@@ -542,7 +542,7 @@ def process_market_cycle(state):
             state["daily_report_sent_today"] = True
             save_state(state)
 
-    # 3:30 PM Monthly Expiry Detailed P&L Report (Sent to Admin & Channel Joiners)
+    # 3:30 PM Monthly Expiry Detailed P&L Report (Automatic)
     if dtime(15, 30) <= curr_time < dtime(15, 35):
         if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
             all_cycle_trades = []
@@ -643,48 +643,16 @@ def main():
     today_str = now_ist.strftime("%Y-%m-%d")
     weekday = now_ist.weekday()
 
-    # MANUAL / ON-DEMAND REPORT GENERATOR (Run anytime from GitHub Actions to get today's or monthly report)
-    curr_time = now_ist.time()
-    if curr_time > dtime(15, 35) or weekday >= 5 or today_str in NSE_HOLIDAYS_2026:
-        print("Manual / Post-market execution. Generating PDF report...")
-        all_trades = []
-        if os.path.exists(HISTORY_FILE):
-            try:
-                with open(HISTORY_FILE, "r") as f:
-                    all_trades = json.load(f)
-            except Exception:
-                pass
-        today_trades = [t for t in all_trades if t.get("date") == today_str]
-
-        pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
-        generate_pdf_report(
-            pdf_filename,
-            f"SAS LEVEL TRACKER - DAILY SCALPING REPORT",
-            f"<b>Date:</b> {today_str} | <b>Calculation:</b> T1 Secured / Entry to Exit",
-            today_trades
-        )
-        send_email_with_attachment(
-            pdf_filename,
-            f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
-            f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
-        )
-        send_telegram_document_to_all(pdf_filename, f"📄 *SAS ALERT: ON-DEMAND / DAILY P&L REPORT ({today_str})*")
-        print("On-demand report dispatched successfully. Exiting.")
-        sys.exit(0)
-
     if weekday >= 5:
         day_name = "Saturday" if weekday == 5 else "Sunday"
-        send_telegram(f"🏖️ *WEEKEND PAUSE ({day_name})*\n\nMarket is closed today.", target="admin")
-        print("Weekend detected. Exiting.")
+        print(f"Weekend ({day_name}) detected. Exiting silently.")
         sys.exit(0)
 
     if today_str in NSE_HOLIDAYS_2026:
-        reason = NSE_HOLIDAYS_2026[today_str]
-        send_telegram(f"🏖️ *MARKET HOLIDAY:* {reason}", target="all")
-        print(f"Holiday today: {reason}. Exiting.")
+        print(f"Market holiday detected. Exiting silently.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* 1-Minute Scalping Bot Active.", target="admin")
+    print("Live Scalping Bot Service Started.")
 
     state = load_state()
 
@@ -695,7 +663,6 @@ def main():
 
             if curr_time > dtime(15, 40):
                 print("Market session completed. Shutting down bot.")
-                send_telegram("🛑 *SYSTEM SHUTDOWN (3:40 PM):* Daily session completed.", target="admin")
                 break
 
             if dtime(9, 28) <= curr_time <= dtime(15, 40):
