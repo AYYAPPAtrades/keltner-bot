@@ -119,20 +119,23 @@ def send_telegram(text: str, target="admin"):
         except Exception as e:
             print(f"Telegram Channel Error: {e}")
 
-def send_telegram_document(pdf_path, caption_text):
+def send_telegram_document_to_all(pdf_path, caption_text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    for chat_id in [ADMIN_CHAT_ID, CHANNEL_CHAT_ID]:
-        if chat_id and not chat_id.startswith("-100XX"):
-            try:
-                with open(pdf_path, "rb") as doc:
-                    requests.post(
-                        url,
-                        data={"chat_id": chat_id, "caption": caption_text, "parse_mode": "Markdown"},
-                        files={"document": doc},
-                        timeout=30
-                    )
-            except Exception as e:
-                print(f"Telegram PDF Document Error for {chat_id}: {e}")
+    chat_ids = [ADMIN_CHAT_ID]
+    if CHANNEL_CHAT_ID and not CHANNEL_CHAT_ID.startswith("-100XX"):
+        chat_ids.append(CHANNEL_CHAT_ID)
+
+    for chat_id in chat_ids:
+        try:
+            with open(pdf_path, "rb") as doc:
+                requests.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption_text, "parse_mode": "Markdown"},
+                    files={"document": doc},
+                    timeout=30
+                )
+        except Exception as e:
+            print(f"Telegram PDF Document Error for {chat_id}: {e}")
 
 # ================= 5. STATE & GITHUB AUTO-COMMIT =================
 def load_state():
@@ -345,7 +348,7 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
                 except Exception:
                     pass
 
@@ -445,7 +448,6 @@ def process_market_cycle(state):
                 if active["action"] != new_signal:
                     exit_price = c_close
                     
-                    # LOGIC: If T1 was already hit before reversal, lock profit at T1 minimum!
                     if active["t1_hit"]:
                         exit_price = active["spot_t1"]
                         opt_exit_price = active["opt_t1"]
@@ -479,7 +481,6 @@ def process_market_cycle(state):
             active = state["active_trade"]
             exit_price = round(float(df.iloc[-1]["Close"]), 2)
             
-            # LOGIC: If T1 was already hit before square off, lock profit at T1 minimum!
             if active["t1_hit"]:
                 exit_price = active["spot_t1"]
                 opt_exit_price = active["opt_t1"]
@@ -513,7 +514,7 @@ def process_market_cycle(state):
             state["active_trade"] = None
             save_state(state)
 
-    # 3:25 PM Daily P&L PDF Report & Email
+    # 3:25 PM Daily P&L PDF Report & Email (Sent to Admin & Channel Joiners)
     if dtime(15, 25) <= curr_time < dtime(15, 30):
         if not state.get("daily_report_sent_today"):
             all_trades = []
@@ -523,7 +524,7 @@ def process_market_cycle(state):
                         all_trades = json.load(f)
                 except Exception:
                     pass
-            today_trades = [t for t in all_trades if t.get("date"] == today_str]
+            today_trades = [t for t in all_trades if t.get("date") == today_str]
 
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
@@ -537,11 +538,11 @@ def process_market_cycle(state):
                 f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
                 f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
             )
-            send_telegram_document(pdf_filename, f"📄 *SAS ALERT: DAILY P&L REPORT ({today_str})*")
+            send_telegram_document_to_all(pdf_filename, f"📄 *SAS ALERT: DAILY P&L REPORT ({today_str})*")
             state["daily_report_sent_today"] = True
             save_state(state)
 
-    # 3:30 PM Monthly Expiry Detailed P&L Report
+    # 3:30 PM Monthly Expiry Detailed P&L Report (Sent to Admin & Channel Joiners)
     if dtime(15, 30) <= curr_time < dtime(15, 35):
         if is_today_monthly_expiry() and not state.get("monthly_report_sent_today"):
             all_cycle_trades = []
@@ -565,7 +566,7 @@ def process_market_cycle(state):
                 f"SAS LEVEL TRACKER: Monthly Expiry-to-Expiry Report ({month_str})",
                 f"Hello Admin,\n\nToday is Monthly Expiry Day. Attached is the complete Expiry-to-Expiry performance log."
             )
-            send_telegram_document(monthly_pdf, f"🏆 *SAS ALERT: MONTHLY EXPIRY-TO-EXPIRY REPORT*")
+            send_telegram_document_to_all(monthly_pdf, f"🏆 *SAS ALERT: MONTHLY EXPIRY-TO-EXPIRY REPORT*")
             clear_expiry_cycle_trades()
             state["monthly_report_sent_today"] = True
             save_state(state)
@@ -667,7 +668,7 @@ def main():
             f"SAS LEVEL TRACKER: Daily P&L Report ({today_str})",
             f"Hello Admin,\n\nPlease find attached the Daily Scalping P&L Report for {today_str}."
         )
-        send_telegram_document(pdf_filename, f"📄 *SAS ALERT: ON-DEMAND / DAILY P&L REPORT ({today_str})*")
+        send_telegram_document_to_all(pdf_filename, f"📄 *SAS ALERT: ON-DEMAND / DAILY P&L REPORT ({today_str})*")
         print("On-demand report dispatched successfully. Exiting.")
         sys.exit(0)
 
