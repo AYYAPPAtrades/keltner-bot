@@ -310,5 +310,18 @@
         "pnl_points": 42.0,
         "reason": "Target 3 Achieved",
         "exit_time": "14:25"
+    },
+    {
+        "date": "2026-10-16",
+        "action": "SELL",
+        "entry": 23094.2,
+        "exit": 23079.2,
+        "spot_pnl": 15.0,
+        "opt_entry": 145.0,
+        "opt_exit": 154.0,
+        "opt_pnl": -9.0,
+        "pnl_points": 15.0,
+        "reason": "Trend Reversal (Secured at T1)",
+        "exit_time": "14:46"
     }
 ]
