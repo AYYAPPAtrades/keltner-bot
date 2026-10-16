@@ -349,5 +349,18 @@
         "pnl_points": -15.0,
         "reason": "Stop Loss Hit",
         "exit_time": "15:04"
+    },
+    {
+        "date": "2026-10-16",
+        "action": "SELL",
+        "entry": 23097.35,
+        "exit": 23108.349609375,
+        "spot_pnl": -10.999609375001455,
+        "opt_entry": 145.0,
+        "opt_exit": 138.4,
+        "opt_pnl": 6.599999999999994,
+        "pnl_points": -10.999609375001455,
+        "reason": "Trend Reversal to BUY",
+        "exit_time": "15:13"
     }
 ]
