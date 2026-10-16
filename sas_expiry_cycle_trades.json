@@ -24,5 +24,18 @@
         "pnl_points": 15.600000000002183,
         "reason": "Trend Reversal (Secured at T1)",
         "exit_time": "09:43"
+    },
+    {
+        "date": "2026-10-16",
+        "action": "BUY",
+        "entry": 22972.95,
+        "exit": 22955.45,
+        "spot_pnl": -17.5,
+        "opt_entry": 145.0,
+        "opt_exit": 136.2,
+        "opt_pnl": -8.800000000000011,
+        "pnl_points": -17.5,
+        "reason": "Stop Loss Hit",
+        "exit_time": "09:46"
     }
 ]
