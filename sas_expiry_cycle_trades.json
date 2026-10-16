@@ -362,5 +362,18 @@
         "pnl_points": -10.999609375001455,
         "reason": "Trend Reversal to BUY",
         "exit_time": "15:13"
+    },
+    {
+        "date": "2026-10-16",
+        "action": "BUY",
+        "entry": 23108.35,
+        "exit": 23119.0,
+        "spot_pnl": 10.650000000001455,
+        "opt_entry": 145.0,
+        "opt_exit": 151.4,
+        "opt_pnl": 6.400000000000006,
+        "pnl_points": 10.650000000001455,
+        "reason": "Intraday Close (3:20 PM)",
+        "exit_time": "15:20"
     }
 ]
