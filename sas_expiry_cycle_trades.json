@@ -595,5 +595,16 @@
         "pnl_points": -15.0,
         "reason": "Stop Loss Hit",
         "exit_time": "13:05"
+    },
+    {
+        "date": "2026-10-19",
+        "action": "BUY",
+        "strike": "22950 CE",
+        "entry": 22934.95,
+        "exit": 22919.95,
+        "spot_pnl": -15.0,
+        "pnl_points": -15.0,
+        "reason": "Stop Loss Hit",
+        "exit_time": "13:10"
     }
 ]
