@@ -375,5 +375,16 @@
         "pnl_points": 10.650000000001455,
         "reason": "Intraday Close (3:20 PM)",
         "exit_time": "15:20"
+    },
+    {
+        "date": "2026-10-19",
+        "action": "SELL",
+        "strike": "23000 PE",
+        "entry": 22977.25,
+        "exit": 23007.65,
+        "spot_pnl": -30.400000000001455,
+        "pnl_points": -30.400000000001455,
+        "reason": "Stop Loss Hit",
+        "exit_time": "09:31"
     }
 ]
