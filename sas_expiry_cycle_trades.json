@@ -430,5 +430,16 @@
         "pnl_points": 23.700000000000728,
         "reason": "Trend Reversal (Secured at T1)",
         "exit_time": "09:56"
+    },
+    {
+        "date": "2026-10-19",
+        "action": "SELL",
+        "strike": "23100 PE",
+        "entry": 23083.3,
+        "exit": 23068.0,
+        "spot_pnl": 15.299999999999272,
+        "pnl_points": 15.299999999999272,
+        "reason": "Trend Reversal (Secured at T1)",
+        "exit_time": "10:30"
     }
 ]
