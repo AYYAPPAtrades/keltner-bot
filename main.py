@@ -314,9 +314,9 @@ def process_market_cycle(state):
     curr_time = now_ist.time()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    if dtime(9, 28) <= curr_time < dtime(9, 35):
+    if dtime(9, 28) <= curr_time < dtime(15, 40):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:30 AM):*\nIntraday 1-Min Scalping Bot Active.", target="admin")
+            send_telegram("🚀 *BOT RUNNING:* 1-Minute Scalping Bot Active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
