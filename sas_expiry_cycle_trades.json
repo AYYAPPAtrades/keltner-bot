@@ -529,5 +529,16 @@
         "pnl_points": 42.0,
         "reason": "Target 3 Achieved",
         "exit_time": "12:04"
+    },
+    {
+        "date": "2026-10-19",
+        "action": "SELL",
+        "strike": "22950 PE",
+        "entry": 22956.6,
+        "exit": 22971.6,
+        "spot_pnl": -15.0,
+        "pnl_points": -15.0,
+        "reason": "Stop Loss Hit",
+        "exit_time": "12:04"
     }
 ]
