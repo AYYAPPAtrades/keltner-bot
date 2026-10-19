@@ -419,5 +419,16 @@
         "pnl_points": -31.5,
         "reason": "Stop Loss Hit",
         "exit_time": "09:42"
+    },
+    {
+        "date": "2026-10-19",
+        "action": "BUY",
+        "strike": "23100 CE",
+        "entry": 23120.2,
+        "exit": 23143.9,
+        "spot_pnl": 23.700000000000728,
+        "pnl_points": 23.700000000000728,
+        "reason": "Trend Reversal (Secured at T1)",
+        "exit_time": "09:56"
     }
 ]
