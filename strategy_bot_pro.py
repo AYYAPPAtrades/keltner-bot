@@ -12,15 +12,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 
 # --- CONFIGURATIONS ---
 TELEGRAM_BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8"
-ADMIN_CHAT_ID = "6789591588"       # Admin Chat ID (Startup & Reports)
-CHANNEL_CHAT_ID = "-1004416495917"  # Channel Chat ID (Levels & Live Signals)
+ADMIN_CHAT_ID = "6789591588"       # Admin Chat ID
+CHANNEL_CHAT_ID = "-1004416495917"  # Channel Chat ID
 
 def send_alert_to_admin(message):
     """Sends alert exclusively to the Admin chat"""
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    response = requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    print("Admin API Response:", response.json())
 
 def send_alert_to_joiners(message):
     """Sends alerts (Levels & Signals) to Telegram Joiners/Channel"""
@@ -63,7 +64,6 @@ def send_pdf_report_to_telegram(filename="sas_daily_report.pdf"):
 
 def get_market_levels():
     try:
-        # Using Nifty 50 or Reliance proxy via Yahoo Finance (^NSEI for Nifty)
         df = yf.download("^NSEI", period="2d", interval="1d", progress=False)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
@@ -88,18 +88,17 @@ def run_pro_bot():
     
     print(f"Bot running at {current_time}")
 
-    # 1. 9:00 AM Startup Alert -> ADMIN ONLY
-    if 900 <= current_hour_min <= 904:
-        msg = (
-            "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-            "🚀 **BOT STARTED SUCCESSFULLY**\n"
-            f"📅 **Date:** {now.strftime('%Y-%m-%d')}\n"
-            "🟢 **System Status:** Active and monitoring market."
-        )
-        send_alert_to_admin(msg)
-        return
+    # --- TEST STARTUP ALERT (Always runs for verification) ---
+    test_msg = (
+        "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
+        "🚀 **BOT RUN SUCCESSFULLY (TEST)**\n"
+        f"📅 **Date:** {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "🟢 **System Status:** Connected and working fine."
+    )
+    send_alert_to_admin(test_msg)
+    print("Test startup message sent to admin.")
 
-    # 2. 9:05 AM Support & Resistance Alert -> JOINERS / CHANNEL ONLY
+    # 1. 9:05 AM Support & Resistance Alert -> JOINERS / CHANNEL ONLY
     if 905 <= current_hour_min <= 909:
         sup, res = get_market_levels()
         msg = (
@@ -112,7 +111,7 @@ def run_pro_bot():
         send_alert_to_joiners(msg)
         return
 
-    # 3. 9:15 AM to 3:30 PM Live Signals -> JOINERS / CHANNEL ONLY
+    # 2. 9:15 AM to 3:30 PM Live Signals -> JOINERS / CHANNEL ONLY
     if 915 <= current_hour_min <= 1530:
         try:
             ticker = "^NSEI" # Nifty 50
@@ -174,7 +173,7 @@ def run_pro_bot():
         except Exception as e:
             print(f"Error in strategy execution: {e}")
 
-    # 4. 3:35 PM Daily Report Generation & PDF Send
+    # 3. 3:35 PM Daily Report Generation & PDF Send
     if 335 <= current_hour_min <= 340:
         try:
             generate_pdf_report()
