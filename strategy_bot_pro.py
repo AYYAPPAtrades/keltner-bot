@@ -1,12 +1,11 @@
-
 import os
 import time
 import calendar
 import requests
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from datetime import datetime, timedelta
-from nsepython import nse_eq_history
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -29,14 +28,6 @@ def send_alert_to_joiners(message):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": message, "parse_mode": "Markdown"})
-
-def find_monthly_expiry(year, month):
-    """Automatically finds the monthly expiry date (Last Thursday or Tuesday of the month)"""
-    last_day = calendar.monthrange(year, month)[1]
-    last_date = datetime(year, month, last_day)
-    offset = (last_date.weekday() - 3) % 7  # Thursday as default expiry
-    expiry_date = last_date - timedelta(days=offset)
-    return expiry_date.strftime('%Y-%m-%d')
 
 def generate_pdf_report(filename="sas_daily_report.pdf"):
     """Generates professional PDF report for Daily P&L"""
@@ -67,18 +58,19 @@ def send_pdf_report_to_telegram(filename="sas_daily_report.pdf"):
         with open(filename, 'rb') as pdf_file:
             files = {'document': pdf_file}
             caption_text = "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n📊 **Daily P&L & Market Report PDF**"
-            # Send to Admin
             requests.post(url, data={'chat_id': ADMIN_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
-            # Send to Channel
             requests.post(url, data={'chat_id': CHANNEL_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
 
 def get_market_levels():
     try:
-        df = nse_eq_history("RELIANCE", "1D")
+        # Using Nifty 50 or Reliance proxy via Yahoo Finance (^NSEI for Nifty)
+        df = yf.download("^NSEI", period="2d", interval="1d", progress=False)
         if df is not None and not df.empty:
-            high = float(df.iloc[-1]['CH_TRADE_HIGH_PRICE'])
-            low = float(df.iloc[-1]['CH_TRADE_LOW_PRICE'])
-            close = float(df.iloc[-1]['CH_CLOSING_PRICE'])
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            high = float(df.iloc[-1]['High'])
+            low = float(df.iloc[-1]['Low'])
+            close = float(df.iloc[-1]['Close'])
             
             pivot = (high + low + close) / 3
             resistance_1 = (2 * pivot) - low
@@ -123,26 +115,26 @@ def run_pro_bot():
     # 3. 9:15 AM to 3:30 PM Live Signals -> JOINERS / CHANNEL ONLY
     if 915 <= current_hour_min <= 1530:
         try:
-            symbol = "RELIANCE"
-            df = nse_eq_history(symbol, "1D")
+            ticker = "^NSEI" # Nifty 50
+            df = yf.download(ticker, period="5d", interval="5m", progress=False)
             
             if df is None or df.empty:
                 return
 
-            df['CH_CLOSING_PRICE'] = pd.to_numeric(df['CH_CLOSING_PRICE'])
-            df['CH_TOT_TRADED_VAL'] = pd.to_numeric(df['CH_TOT_TRADED_VAL'])
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
 
             # EMA Calculations (5, 10, 20, 50, 200)
-            df['EMA_5'] = df['CH_CLOSING_PRICE'].ewm(span=5, adjust=False).mean()
-            df['EMA_10'] = df['CH_CLOSING_PRICE'].ewm(span=10, adjust=False).mean()
-            df['EMA_20'] = df['CH_CLOSING_PRICE'].ewm(span=20, adjust=False).mean()
-            df['EMA_50'] = df['CH_CLOSING_PRICE'].ewm(span=50, adjust=False).mean()
-            df['EMA_200'] = df['CH_CLOSING_PRICE'].ewm(span=200, adjust=False).mean()
+            df['EMA_5'] = df['Close'].ewm(span=5, adjust=False).mean()
+            df['EMA_10'] = df['Close'].ewm(span=10, adjust=False).mean()
+            df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+            df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+            df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
 
             latest = df.iloc[-1]
-            close_price = float(latest['CH_CLOSING_PRICE'])
-            volume = float(latest['CH_TOT_TRADED_VAL'])
-            avg_volume = df['CH_TOT_TRADED_VAL'].rolling(window=20).mean().iloc[-1]
+            close_price = float(latest['Close'])
+            volume = float(latest['Volume'])
+            avg_volume = df['Volume'].rolling(window=20).mean().iloc[-1]
 
             ema5 = float(latest['EMA_5'])
             ema10 = float(latest['EMA_10'])
@@ -166,7 +158,7 @@ def run_pro_bot():
                 signal_msg = (
                     "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
                     "🚨 **INTRADAY SIGNAL ALERT** 🚨\n\n"
-                    f"📊 **Asset:** {symbol}\n"
+                    "📊 **Asset:** NIFTY 50\n"
                     "🟢 **Action:** BUY (LONG)\n"
                     f"💰 **Entry Price:** `{entry_price}`\n\n"
                     f"🛑 **Stop Loss (SL):** `{stop_loss}`\n"
