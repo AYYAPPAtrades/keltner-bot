@@ -24,7 +24,7 @@ def send_alert_to_admin(message):
     print("Admin API Response:", response.json())
 
 def send_alert_to_joiners(message):
-    """Sends alerts (Levels & Signals) to Telegram Joiners/Channel"""
+    """Sends alerts (Levels, Signals & Square-off) to Telegram Joiners/Channel"""
     if not TELEGRAM_BOT_TOKEN or not CHANNEL_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -44,9 +44,9 @@ def generate_pdf_report(filename="sas_daily_report.pdf"):
     story.append(Spacer(1, 8))
     
     content = (
-        "<b>Strategy Used:</b> Price + Volume + EMA (5, 10, 20, 50, 200)<br/>"
+        "<b>Strategy Used:</b> Price + Volume + EMA (5, 10, 20, 50, 200) [3-Min Candle]<br/>"
         "<b>Total Signals Generated:</b> Today's Active Signals<br/>"
-        "<b>Status:</b> Market Closed Successfully.<br/><br/>"
+        "<b>Status:</b> Market Closed & All Positions Square-off Completed.<br/><br/>"
         "<i>Generated automatically by SAS LEVEL TRACKER Bot.</i>"
     )
     story.append(Paragraph(content, styles['Normal']))
@@ -111,11 +111,11 @@ def run_pro_bot():
         send_alert_to_joiners(msg)
         return
 
-    # 2. 9:15 AM to 3:30 PM Live Signals -> JOINERS / CHANNEL ONLY
-    if 915 <= current_hour_min <= 1530:
+    # 2. 9:15 AM to 3:19 PM Live Signals (3-Min Interval) -> JOINERS / CHANNEL ONLY
+    if 915 <= current_hour_min <= 1519:
         try:
             ticker = "^NSEI" # Nifty 50
-            df = yf.download(ticker, period="5d", interval="5m", progress=False)
+            df = yf.download(ticker, period="5d", interval="3m", progress=False)
             
             if df is None or df.empty:
                 return
@@ -156,7 +156,7 @@ def run_pro_bot():
 
                 signal_msg = (
                     "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-                    "🚨 **INTRADAY SIGNAL ALERT** 🚨\n\n"
+                    "🚨 **INTRADAY SIGNAL ALERT (3-Min)** 🚨\n\n"
                     "📊 **Asset:** NIFTY 50\n"
                     "🟢 **Action:** BUY (LONG)\n"
                     f"💰 **Entry Price:** `{entry_price}`\n\n"
@@ -168,13 +168,25 @@ def run_pro_bot():
                     f"⏰ **Time:** {now.strftime('%H:%M:%S')}"
                 )
                 send_alert_to_joiners(signal_msg)
-                print("Signal sent to joiners successfully.")
+                print("3-Min Signal sent to joiners successfully.")
 
         except Exception as e:
             print(f"Error in strategy execution: {e}")
 
-    # 3. 3:35 PM Daily Report Generation & PDF Send
-    if 335 <= current_hour_min <= 340:
+    # 3. 3:20 PM Auto Square-off / Exit Warning Alert -> JOINERS / CHANNEL ONLY
+    if 1520 <= current_hour_min <= 1524:
+        square_off_msg = (
+            "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
+            "⚠️ **AUTO SQUARE-OFF WARNING (3:20 PM)** ⚠️\n\n"
+            "🔔 All active intraday positions should be closed or manual square-off recommended!\n"
+            "🚪 Exit previous signals now to avoid broker auto-square off charges.\n\n"
+            f"⏰ **Time:** {now.strftime('%H:%M:%S')}"
+        )
+        send_alert_to_joiners(square_off_msg)
+        print("Auto square-off warning sent to joiners.")
+
+    # 4. 3:35 PM Daily Report Generation & PDF Send -> ADMIN & CHANNEL
+    if 1535 <= current_hour_min <= 1540:
         try:
             generate_pdf_report()
             send_pdf_report_to_telegram()
