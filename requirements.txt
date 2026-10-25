@@ -1,4 +1,3 @@
-
 websocket-client
 pandas
 numpy
