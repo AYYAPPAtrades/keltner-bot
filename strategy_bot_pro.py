@@ -20,47 +20,59 @@ def send_alert_to_admin(message):
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    response = requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
-    print("Admin API Response:", response.json())
+    try:
+        response = requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        print("Admin API Response:", response.json())
+    except Exception as e:
+        print(f"Error sending admin alert: {e}")
 
 def send_alert_to_joiners(message):
     """Sends alerts (Levels, Signals & Square-off) to Telegram Joiners/Channel"""
     if not TELEGRAM_BOT_TOKEN or not CHANNEL_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    try:
+        requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    except Exception as e:
+        print(f"Error sending joiners alert: {e}")
 
 def generate_pdf_report(filename="sas_daily_report.pdf"):
     """Generates professional PDF report for Daily P&L"""
-    doc = SimpleDocTemplate(filename, pagesize=letter)
-    story = []
-    styles = getSampleStyleSheet()
-    
-    story.append(Paragraph("SAS LEVEL TRACKER - DAILY REPORT", styles['Title']))
-    story.append(Spacer(1, 12))
-    
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    story.append(Paragraph(f"<b>Date:</b> {date_str}", styles['Normal']))
-    story.append(Spacer(1, 8))
-    
-    content = (
-        "<b>Strategy Used:</b> Price + Volume + EMA (5, 10, 20, 50, 200) [3-Min Candle]<br/>"
-        "<b>Total Signals Generated:</b> Today's Active Signals<br/>"
-        "<b>Status:</b> Market Closed & All Positions Square-off Completed.<br/><br/>"
-        "<i>Generated automatically by SAS LEVEL TRACKER Bot.</i>"
-    )
-    story.append(Paragraph(content, styles['Normal']))
-    doc.build(story)
+    try:
+        doc = SimpleDocTemplate(filename, pagesize=letter)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        story.append(Paragraph("SAS LEVEL TRACKER - DAILY REPORT", styles['Title']))
+        story.append(Spacer(1, 12))
+        
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        story.append(Paragraph(f"<b>Date:</b> {date_str}", styles['Normal']))
+        story.append(Spacer(1, 8))
+        
+        content = (
+            "<b>Strategy Used:</b> Price + Volume + EMA (5, 10, 20, 50, 200) [3-Min Candle]<br/>"
+            "<b>Total Signals Generated:</b> Today's Active Signals<br/>"
+            "<b>Status:</b> Market Closed & All Positions Square-off Completed.<br/><br/>"
+            "<i>Generated automatically by SAS LEVEL TRACKER Bot.</i>"
+        )
+        story.append(Paragraph(content, styles['Normal']))
+        doc.build(story)
+    except Exception as e:
+        print(f"Error generating PDF: {e}")
 
 def send_pdf_report_to_telegram(filename="sas_daily_report.pdf"):
     """Sends the generated PDF report to Admin and Channel"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     if os.path.exists(filename):
-        with open(filename, 'rb') as pdf_file:
-            files = {'document': pdf_file}
-            caption_text = "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n📊 **Daily P&L & Market Report PDF**"
-            requests.post(url, data={'chat_id': ADMIN_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
-            requests.post(url, data={'chat_id': CHANNEL_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
+        try:
+            with open(filename, 'rb') as pdf_file:
+                files = {'document': pdf_file}
+                caption_text = "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n📊 **Daily P&L & Market Report PDF**"
+                requests.post(url, data={'chat_id': ADMIN_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
+                requests.post(url, data={'chat_id': CHANNEL_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
+        except Exception as e:
+            print(f"Error sending PDF to Telegram: {e}")
 
 def get_market_levels():
     try:
@@ -77,8 +89,8 @@ def get_market_levels():
             support_1 = (2 * pivot) - high
             
             return round(support_1, 2), round(resistance_1, 2)
-    except:
-        pass
+    except Exception as e:
+        print(f"Error getting market levels: {e}")
     return 0, 0
 
 def run_pro_bot():
