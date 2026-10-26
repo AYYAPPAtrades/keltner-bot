@@ -20,7 +20,6 @@ import pytz
 # ================= 1. CREDENTIALS & CONSTANTS =================
 BOT_TOKEN = "8830008372:AAGaq16u0STxZR1Z9q3qO5Lr1MQD288_9pc"
 
-# Admin & Broadcast Channels
 ADMIN_CHAT_ID = "6789591588"
 TELEGRAM_CHAT_IDS = [
     "8996427731",
@@ -68,7 +67,7 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. TELEGRAM & EMAIL UTILS =================
+# ================= 3. TELEGRAM & EMAIL UTILS (DEBUG ENABLED) =================
 def send_telegram(message, admin_only=False):
     target_chats = [ADMIN_CHAT_ID] if admin_only else TELEGRAM_CHAT_IDS
     formatted_msg = f"⚡ *SAS LEVEL TRACKER* ⚡\n\n{message}"
@@ -76,7 +75,8 @@ def send_telegram(message, admin_only=False):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": formatted_msg, "parse_mode": "Markdown"}
         try:
-            requests.post(url, json=payload, timeout=8)
+            res = requests.post(url, json=payload, timeout=8)
+            print(f"Telegram response for {cid}: {res.status_code}, {res.text}")
         except Exception as e:
             print(f"Telegram Error for {cid}: {e}")
 
@@ -144,7 +144,7 @@ def git_commit_push(filename):
         subprocess.run(["git", "config", "--global", "user.email", "bot@github.com"], check=True)
         subprocess.run(["git", "config", "--global", "user.name", "SAS Trading Bot"], check=True)
         subprocess.run(["git", "add", filename], check=True)
-        subprocess.run(["git", "commit", "-m", f"Auto-backup: update {filename}"], check=True)
+        subprocess.run(["git", "commit", -m, f"Auto-backup: update {filename}"], check=True)
         subprocess.run(["git", "push"], check=True)
         print(f"Successfully committed and pushed {filename} to GitHub.")
     except Exception as e:
@@ -272,6 +272,8 @@ def run_trading_bot():
     start_msg = f"""🤖 *Bot Started Successfully*
 Time: `{start_time_str}`
 Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
+    
+    # Send Start Alert to Admin immediately
     send_telegram(start_msg, admin_only=True)
     print(f"SAS LEVEL TRACKER System Running at {start_time_str}...")
 
