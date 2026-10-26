@@ -25,4 +25,4 @@ jobs:
           pip install yfinance pandas ta requests reportlab pytz numpy
 
       - name: Run Scalper Bot
-        run: python scalper.py
+        run: python strategy_bot_pro.py
