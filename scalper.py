@@ -19,6 +19,9 @@ import pytz
 
 # ================= 1. CREDENTIALS & CONSTANTS =================
 BOT_TOKEN = "8830008372:AAGaq16u0STxZR1Z9q3qO5Lr1MQD288_9pc"
+
+# Admin & Broadcast Channels
+ADMIN_CHAT_ID = "6789591588"
 TELEGRAM_CHAT_IDS = [
     "8996427731",
     "6789591588",
@@ -67,7 +70,7 @@ def is_today_monthly_expiry():
 
 # ================= 3. TELEGRAM & EMAIL UTILS =================
 def send_telegram(message, admin_only=False):
-    target_chats = [TELEGRAM_CHAT_IDS[0]] if admin_only else TELEGRAM_CHAT_IDS
+    target_chats = [ADMIN_CHAT_ID] if admin_only else TELEGRAM_CHAT_IDS
     formatted_msg = f"⚡ *SAS LEVEL TRACKER* ⚡\n\n{message}"
     for cid in target_chats:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -75,7 +78,7 @@ def send_telegram(message, admin_only=False):
         try:
             requests.post(url, json=payload, timeout=8)
         except Exception as e:
-            print(f"Telegram Error: {e}")
+            print(f"Telegram Error for {cid}: {e}")
 
 def send_telegram_file(file_path, caption):
     caption_text = f"📊 *SAS LEVEL TRACKER*\n{caption}"
@@ -306,7 +309,6 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
                     df['ema_50'] = ta.trend.ema_indicator(df['Close'], window=50)
                     df['ema_200'] = ta.trend.ema_indicator(df['Close'], window=200)
                     
-                    # Volume Moving Average for Volume confirmation
                     df['vol_ma'] = df['Volume'].rolling(window=20).mean()
 
                     curr = df.iloc[-1]
@@ -320,8 +322,7 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
                     is_trading_window = "09:20" <= current_time_str <= "14:45"
                     atm_strike = round(ltp / 50.0) * 50
 
-                    # New Strategy Triggers: Price + Volume + Multi-EMA
-                    volume_spike = vol > (avg_vol * 1.1) # Volume above average
+                    volume_spike = vol > (avg_vol * 1.1)
 
                     buy_trigger = (
                         ltp > curr['ema_50']
