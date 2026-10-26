@@ -1,230 +1,450 @@
 import os
+import sys
+import json
 import time
+import smtplib
 import calendar
 import requests
-import pandas as pd
+import subprocess
 import numpy as np
+import pandas as pd
+import ta
 import yfinance as yf
-from datetime import datetime, timedelta
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from datetime import datetime, date, timedelta, time as dtime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import pytz
 
-# --- CONFIGURATIONS ---
-TELEGRAM_BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDpwJ52zQA8"
-ADMIN_CHAT_ID = "6789591588"       # Admin Chat ID
-CHANNEL_CHAT_ID = "-1004416495917"  # Channel Chat ID
+# ================= 1. CREDENTIALS & CONSTANTS =================
+BOT_TOKEN = "8830008372:AAGaq16u0STxZR1Z9q3qO5Lr1MQD288_9pc"
+TELEGRAM_CHAT_IDS = [
+    "8996427731",
+    "6789591588",
+    "-1004399032148"
+]
 
-def send_alert_to_admin(message):
-    """Sends alert exclusively to the Admin chat and prints response"""
-    if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        response = requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
-        print("Admin API Response:", response.json())
-    except Exception as e:
-        print(f"Error sending admin alert: {e}")
+ADMIN_EMAIL = "Shinos99@gmail.com"
+GMAIL_EMAIL_PASS = "Qm1mu8xU"
 
-def send_alert_to_joiners(message):
-    """Sends alerts (Levels, Signals & Square-off) to Telegram Joiners/Channel and prints response"""
-    if not TELEGRAM_BOT_TOKEN or not CHANNEL_CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        response = requests.post(url, json={"chat_id": CHANNEL_CHAT_ID, "text": message, "parse_mode": "Markdown"})
-        print("Channel API Response:", response.json())
-    except Exception as e:
-        print(f"Error sending joiners alert: {e}")
+STATE_FILE = "trade_state.json"
+DATA_LOG_FILE = "trade_history.json"
+IST = pytz.timezone('Asia/Kolkata')
 
-def generate_pdf_report(filename="sas_daily_report.pdf"):
-    """Generates professional PDF report for Daily P&L"""
-    try:
-        doc = SimpleDocTemplate(filename, pagesize=letter)
-        story = []
-        styles = getSampleStyleSheet()
-        
-        story.append(Paragraph("SAS LEVEL TRACKER - DAILY REPORT", styles['Title']))
-        story.append(Spacer(1, 12))
-        
-        date_str = datetime.now().strftime('%Y-%m-%d')
-        story.append(Paragraph(f"<b>Date:</b> {date_str}", styles['Normal']))
-        story.append(Spacer(1, 8))
-        
-        content = (
-            "<b>Strategy Used:</b> Price + Volume + EMA (5, 10, 20, 50, 200) [3-Min Candle]<br/>"
-            "<b>Total Signals Generated:</b> Today's Active Signals<br/>"
-            "<b>Status:</b> Market Closed & All Positions Square-off Completed.<br/><br/>"
-            "<i>Generated automatically by SAS LEVEL TRACKER Bot.</i>"
-        )
-        story.append(Paragraph(content, styles['Normal']))
-        doc.build(story)
-    except Exception as e:
-        print(f"Error generating PDF: {e}")
+TARGET_PTS = 30.0
+SL_PTS = 30.0
 
-def send_pdf_report_to_telegram(filename="sas_daily_report.pdf"):
-    """Sends the generated PDF report to Admin and Channel"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    if os.path.exists(filename):
+NSE_HOLIDAYS_2026 = {
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Ram Navami",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day / Labour Day",
+    "2026-08-15": "Independence Day",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-08": "Diwali Balipratipada",
+    "2026-12-25": "Christmas"
+}
+
+# ================= 2. MONTHLY EXPIRY CALCULATOR =================
+def get_monthly_expiry_date(year, month):
+    last_day = calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+    target_weekday = 3  # Thursday
+    while d.weekday() != target_weekday:
+        d -= timedelta(days=1)
+    while d.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026 or d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+def is_today_monthly_expiry():
+    today = datetime.now(IST).date()
+    expiry_date = get_monthly_expiry_date(today.year, today.month)
+    return today == expiry_date
+
+# ================= 3. TELEGRAM & EMAIL UTILS =================
+def send_telegram(message, admin_only=False):
+    target_chats = [TELEGRAM_CHAT_IDS[0]] if admin_only else TELEGRAM_CHAT_IDS
+    formatted_msg = f"⚡ *SAS LEVEL TRACKER* ⚡\n\n{message}"
+    for cid in target_chats:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": cid, "text": formatted_msg, "parse_mode": "Markdown"}
         try:
-            with open(filename, 'rb') as pdf_file:
-                files = {'document': pdf_file}
-                caption_text = "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n📊 **Daily P&L & Market Report PDF**"
-                requests.post(url, data={'chat_id': ADMIN_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
-                requests.post(url, data={'chat_id': CHANNEL_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}, files=files)
+            requests.post(url, json=payload, timeout=8)
         except Exception as e:
-            print(f"Error sending PDF to Telegram: {e}")
+            print(f"Telegram Error: {e}")
 
-def get_market_levels():
+def send_telegram_file(file_path, caption):
+    caption_text = f"📊 *SAS LEVEL TRACKER*\n{caption}"
+    for cid in TELEGRAM_CHAT_IDS:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+        post_data = {"chat_id": cid, "caption": caption_text, "parse_mode": "Markdown"}
+        try:
+            with open(file_path, 'rb') as f:
+                requests.post(url, data=post_data, files={'document': f}, timeout=25)
+        except Exception as e:
+            print(f"Telegram File Send Error: {e}")
+
+def send_email_with_pdf(file_path, subject):
     try:
-        df = yf.download("^NSEI", period="2d", interval="1d", progress=False)
-        if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
-            high = float(df.iloc[-1]['High'])
-            low = float(df.iloc[-1]['Low'])
-            close = float(df.iloc[-1]['Close'])
+        msg = MIMEMultipart()
+        msg['From'] = ADMIN_EMAIL
+        msg['To'] = ADMIN_EMAIL
+        msg['Subject'] = f"SAS LEVEL TRACKER - {subject}"
+        msg.attach(MIMEText("Please find attached the trading performance report.", 'plain'))
+        
+        with open(file_path, 'rb') as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
+            msg.attach(part)
             
-            pivot = (high + low + close) / 3
-            resistance_1 = (2 * pivot) - low
-            support_1 = (2 * pivot) - high
-            
-            return round(support_1, 2), round(resistance_1, 2)
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(ADMIN_EMAIL, GMAIL_EMAIL_PASS.replace(" ", ""))
+        server.sendmail(ADMIN_EMAIL, ADMIN_EMAIL, msg.as_string())
+        server.quit()
+        print("Email sent successfully.")
     except Exception as e:
-        print(f"Error getting market levels: {e}")
-    return 0, 0
+        print(f"Email Dispatch Error: {e}")
 
-def run_continuous_bot():
-    print("🚀 SAS Level Tracker Continuous Bot Started...")
+# ================= 4. STATE & GITHUB BACKUP =================
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "trade": None,
+        "sr_sent": False,
+        "last_signal_time": "",
+        "today_trade_count": 0,
+        "last_trade_date": "",
+        "daily_report_sent": False
+    }
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=4)
+    except Exception as e:
+        print(f"State Save Error: {e}")
+
+def git_commit_push(filename):
+    try:
+        subprocess.run(["git", "config", "--global", "user.email", "bot@github.com"], check=True)
+        subprocess.run(["git", "config", "--global", "user.name", "SAS Trading Bot"], check=True)
+        subprocess.run(["git", "add", filename], check=True)
+        subprocess.run(["git", "commit", "-m", f"Auto-backup: update {filename}"], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print(f"Successfully committed and pushed {filename} to GitHub.")
+    except Exception as e:
+        print(f"Git auto-commit failed: {e}")
+
+def log_trade(trade_record):
+    trades = []
+    if os.path.exists(DATA_LOG_FILE):
+        try:
+            with open(DATA_LOG_FILE, "r") as f:
+                trades = json.load(f)
+        except Exception:
+            trades = []
+    trades.append(trade_record)
+    try:
+        with open(DATA_LOG_FILE, "w") as f:
+            json.dump(trades, f, indent=4)
+        git_commit_push(DATA_LOG_FILE)
+    except Exception as e:
+        print(f"Log Save Error: {e}")
+
+def get_daily_levels():
+    try:
+        df = yf.download('^NSEI', period='5d', interval='1d', progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        prev = df.iloc[-2]
+        h, l, c = prev['High'], prev['Low'], prev['Close']
+        pivot = (h + l + c) / 3
+        r1 = (2 * pivot) - l
+        s1 = (2 * pivot) - h
+        r2 = pivot + (h - l)
+        s2 = pivot - (h - l)
+        return round(pivot, 2), round(r1, 2), round(r2, 2), round(s1, 2), round(s2, 2)
+    except Exception as e:
+        print(f"Pivot calculation error: {e}")
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+# ================= 5. REPORT GENERATION =================
+def generate_pdf(report_type="Daily"):
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    pdf_filename = f"{report_type}_Report_{today_str}.pdf"
+    trades = []
     
-    # Flags to ensure actions happen only once per day
-    startup_sent_date = ""
-    levels_sent_date = ""
-    square_off_sent_date = ""
-    report_sent_date = ""
+    if os.path.exists(DATA_LOG_FILE):
+        try:
+            with open(DATA_LOG_FILE, "r") as f:
+                all_trades = json.load(f)
+                if report_type == "Daily":
+                    trades = [t for t in all_trades if t.get('date') == today_str]
+                else:
+                    curr_month = datetime.now(IST).strftime("%Y-%m")
+                    trades = [t for t in all_trades if str(t.get('date', '')).startswith(curr_month)]
+        except Exception as e:
+            print(f"Error reading log file for PDF: {e}")
+
+    doc = SimpleDocTemplate(pdf_filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph("<b>SAS LEVEL TRACKER</b>", styles['Title']),
+        Paragraph(f"<b>{report_type} Performance Report ({today_str})</b>", styles['Heading2']),
+        Spacer(1, 15)
+    ]
+
+    table_data = [["Time", "Signal", "Strike", "Entry", "Exit", "Reason", "P&L (Pts)"]]
+    total_pts = 0.0
+
+    if not trades:
+        table_data.append(["-", "No Trades", "-", "-", "-", "No Trades Recorded", "-"])
+    else:
+        for t in trades:
+            entry = float(t.get('entry', 0.0))
+            exit_p = float(t.get('exit', 0.0))
+            pnl = float(t.get('pnl', 0.0))
+            total_pts += pnl
+            table_data.append([
+                t.get('time', ''),
+                t.get('type', ''),
+                t.get('strike', '-'),
+                f"Rs.{entry:.2f}",
+                f"Rs.{exit_p:.2f}",
+                t.get('reason', ''),
+                f"{pnl:+} pts"
+            ])
+
+    table_data.append(["", "", "", "", "", "Net Points P&L", f"{round(total_pts, 2):+} pts"])
+    table = Table(table_data, colWidths=[55, 50, 75, 65, 65, 115, 75])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#ECF0F1")),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    return pdf_filename
+
+# ================= 6. MAIN TRADING BOT ENGINE =================
+def run_trading_bot():
+    state = load_state()
+    today_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+    now_ist = datetime.now(IST)
+    weekday = now_ist.weekday()
+
+    if weekday >= 5:
+        print("Weekend detected. Exiting.")
+        sys.exit(0)
+
+    if today_date_str in NSE_HOLIDAYS_2026:
+        print(f"Holiday today: {NSE_HOLIDAYS_2026[today_date_str]}. Exiting.")
+        sys.exit(0)
+
+    if state.get("last_trade_date") != today_date_str:
+        state["today_trade_count"] = 0
+        state["last_trade_date"] = today_date_str
+        state["sr_sent"] = False
+        state["daily_report_sent"] = False
+        save_state(state)
+
+    start_time_str = now_ist.strftime("%I:%M %p")
+    start_msg = f"""🤖 *Bot Started Successfully*
+Time: `{start_time_str}`
+Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
+    send_telegram(start_msg, admin_only=True)
+    print(f"SAS LEVEL TRACKER System Running at {start_time_str}...")
 
     while True:
-        try:
-            now = datetime.now()
-            current_date = now.strftime("%Y-%m-%d")
-            current_hour_min = int(now.strftime("%H%M"))
-            current_weekday = now.weekday() # 0-4 = Monday to Friday
+        now = datetime.now(IST)
+        current_time_str = now.strftime("%H:%M")
 
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current_weekday >= 5:
-                print("Weekend today. Sleeping for 1 hour...")
-                time.sleep(3600)
-                continue
+        # 09:05 AM Support & Resistance Levels
+        if "09:05" <= current_time_str < "09:10" and not state.get("sr_sent"):
+            p, r1, r2, s1, s2 = get_daily_levels()
+            if p > 0:
+                msg = f"""📈 *NIFTY 50 DAILY LEVELS*
 
-            # 1. 9:00 AM Startup Alert -> ADMIN ONLY (Once a day)
-            if 900 <= current_hour_min <= 904 and startup_sent_date != current_date:
-                test_msg = (
-                    "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-                    "🚀 **BOT RUN SUCCESSFULLY (LIVE)**\n"
-                    f"📅 **Date:** {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    "🟢 **System Status:** Connected and monitoring market continuously."
-                )
-                send_alert_to_admin(test_msg)
-                startup_sent_date = current_date
-                print("Startup message sent to admin.")
+🔴 Resistance 2 (R2): `{r2}`
+🔴 Resistance 1 (R1): `{r1}`
+⚪ Pivot Point: `{p}`
+🟢 Support 1 (S1): `{s1}`
+🟢 Support 2 (S2): `{s2}`"""
+                send_telegram(msg, admin_only=False)
+                state["sr_sent"] = True
+                save_state(state)
 
-            # 2. 9:05 AM Support & Resistance Alert -> CHANNEL ONLY (Once a day)
-            if 905 <= current_hour_min <= 909 and levels_sent_date != current_date:
-                sup, res = get_market_levels()
-                msg = (
-                    "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-                    "📊 **NIFTY / STOCK SUPPORT & RESISTANCE**\n\n"
-                    f"🔴 **Resistance 1:** `{res}`\n"
-                    f"🟢 **Support 1:** `{sup}`\n\n"
-                    "⚠️ Watch out for breakouts!"
-                )
-                send_alert_to_joiners(msg)
-                levels_sent_date = current_date
-                print("Support & Resistance levels sent to channel.")
-
-            # 3. 9:15 AM to 3:19 PM Live Signals (3-Min Interval check)
-            if 915 <= current_hour_min <= 1519:
-                ticker = "^NSEI" # Nifty 50
-                df = yf.download(ticker, period="5d", interval="3m", progress=False)
-                
-                if df is not None and not df.empty:
+        # 09:15 AM to 03:20 PM - Continuous Multi-EMA & Volume Engine
+        if "09:15" <= current_time_str < "15:20":
+            try:
+                df = yf.download('^NSEI', period='5d', interval='2m', progress=False)
+                if not df.empty and len(df) >= 210:
                     if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.droplevel(1)
+                        df.columns = df.columns.get_level_values(0)
 
-                    df['EMA_5'] = df['Close'].ewm(span=5, adjust=False).mean()
-                    df['EMA_10'] = df['Close'].ewm(span=10, adjust=False).mean()
-                    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
-                    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
-                    df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
+                    # Multi-EMA Calculation (5, 10, 20, 50, 200)
+                    df['ema_5'] = ta.trend.ema_indicator(df['Close'], window=5)
+                    df['ema_10'] = ta.trend.ema_indicator(df['Close'], window=10)
+                    df['ema_20'] = ta.trend.ema_indicator(df['Close'], window=20)
+                    df['ema_50'] = ta.trend.ema_indicator(df['Close'], window=50)
+                    df['ema_200'] = ta.trend.ema_indicator(df['Close'], window=200)
+                    
+                    # Volume Moving Average for Volume confirmation
+                    df['vol_ma'] = df['Volume'].rolling(window=20).mean()
 
-                    latest = df.iloc[-1]
-                    close_price = float(latest['Close'])
-                    volume = float(latest['Volume'])
-                    avg_volume = df['Volume'].rolling(window=20).mean().iloc[-1]
+                    curr = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    ltp = round(curr['Close'], 2)
+                    vol = curr['Volume']
+                    avg_vol = curr['vol_ma']
+                    bar_time = str(df.index[-1])
 
-                    ema5 = float(latest['EMA_5'])
-                    ema10 = float(latest['EMA_10'])
-                    ema20 = float(latest['EMA_20'])
-                    ema50 = float(latest['EMA_50'])
-                    ema200 = float(latest['EMA_200'])
+                    trade = state.get("trade")
+                    is_trading_window = "09:20" <= current_time_str <= "14:45"
+                    atm_strike = round(ltp / 50.0) * 50
 
-                    is_uptrend = (close_price > ema200) and (ema5 > ema10) and (ema10 > ema20) and (ema20 > ema50)
-                    is_volume_spike = volume > (avg_volume * 1.2)
+                    # New Strategy Triggers: Price + Volume + Multi-EMA
+                    volume_spike = vol > (avg_vol * 1.1) # Volume above average
 
-                    if is_uptrend and is_volume_spike:
-                        entry_price = close_price
-                        stop_loss = round(ema20 - (entry_price * 0.001), 2)
-                        risk = entry_price - stop_loss
-                        
-                        t1 = round(entry_price + (risk * 1), 2)
-                        t2 = round(entry_price + (risk * 2), 2)
-                        t3 = round(entry_price + (risk * 3), 2)
+                    buy_trigger = (
+                        ltp > curr['ema_50']
+                        and ltp > curr['ema_200']
+                        and volume_spike
+                        and prev['ema_5'] <= prev['ema_10'] and curr['ema_5'] > curr['ema_10']
+                        and curr['ema_10'] > curr['ema_20']
+                        and state.get("last_signal_time") != bar_time
+                    )
 
-                        signal_msg = (
-                            "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-                            "🚨 **INTRADAY SIGNAL ALERT (3-Min)** 🚨\n\n"
-                            "📊 **Asset:** NIFTY 50\n"
-                            "🟢 **Action:** BUY (LONG)\n"
-                            f"💰 **Entry Price:** `{entry_price}`\n\n"
-                            f"🛑 **Stop Loss (SL):** `{stop_loss}`\n"
-                            f"🎯 **Target 1 (T1):** `{t1}`\n"
-                            f"🎯 **Target 2 (T2):** `{t2}`\n"
-                            f"🎯 **Target 3 (T3):** `{t3}`\n\n"
-                            "📈 **Status:** Active Signal\n"
-                            f"⏰ **Time:** {now.strftime('%H:%M:%S')}"
-                        )
-                        send_alert_to_joiners(signal_msg)
-                        print("3-Min Signal sent to joiners successfully.")
+                    sell_trigger = (
+                        ltp < curr['ema_50']
+                        and ltp < curr['ema_200']
+                        and volume_spike
+                        and prev['ema_5'] >= prev['ema_10'] and curr['ema_5'] < curr['ema_10']
+                        and curr['ema_10'] < curr['ema_20']
+                        and state.get("last_signal_time") != bar_time
+                    )
 
-            # 4. 3:20 PM Auto Square-off Warning -> CHANNEL ONLY (Once a day)
-            if 1520 <= current_hour_min <= 1524 and square_off_sent_date != current_date:
-                square_off_msg = (
-                    "🔴🟠 **SAS LEVEL TRACKER** 🔴🟠\n\n"
-                    "⚠️ **AUTO SQUARE-OFF WARNING (3:20 PM)** ⚠️\n\n"
-                    "🔔 All active intraday positions should be closed or manual square-off recommended!\n"
-                    "🚪 Exit previous signals now to avoid broker auto-square off charges.\n\n"
-                    f"⏰ **Time:** {now.strftime('%H:%M:%S')}"
-                )
-                send_alert_to_joiners(square_off_msg)
-                square_off_sent_date = current_date
-                print("Auto square-off warning sent to joiners.")
+                    # ----- ACTIVE TRADE MONITORING -----
+                    if trade:
+                        strike = trade.get('strike', f"{atm_strike} CE")
+                        if trade['type'] == "BUY":
+                            if ltp >= trade['target']:
+                                pnl = round(ltp - trade['entry'], 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 30 Hit", "pnl": pnl})
+                                state['trade'] = None
+                                save_state(state)
+                                send_telegram(f"🎯 *TARGET HIT (+30 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts` 🚀")
 
-            # 5. 3:35 PM Daily Report Generation & PDF Send -> ADMIN & CHANNEL (Once a day)
-            if 1535 <= current_hour_min <= 1540 and report_sent_date != current_date:
-                try:
-                    generate_pdf_report()
-                    send_pdf_report_to_telegram()
-                    report_sent_date = current_date
-                    print("Daily PDF Report generated and sent successfully.")
-                except Exception as e:
-                    print(f"Error generating report: {e}")
+                            elif ltp <= trade['sl']:
+                                pnl = round(ltp - trade['entry'], 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss 30 Hit", "pnl": pnl})
+                                state['trade'] = None
+                                save_state(state)
+                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
 
-            # Wait for 3 minutes (180 seconds) before checking the market again
-            time.sleep(180)
+                        elif trade['type'] == "SELL":
+                            if ltp <= trade['target']:
+                                pnl = round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 30 Hit", "pnl": pnl})
+                                state['trade'] = None
+                                save_state(state)
+                                send_telegram(f"🎯 *TARGET HIT (+30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts` 🚀")
 
-        except Exception as e:
-            print(f"Error in continuous loop: {e}")
-            time.sleep(60)
+                            elif ltp >= trade['sl']:
+                                pnl = round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss 30 Hit", "pnl": pnl})
+                                state['trade'] = None
+                                save_state(state)
+                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
+
+                    # ----- ENTRY TRIGGER -----
+                    if state.get("trade") is None and is_trading_window:
+                        if buy_trigger:
+                            strike = f"{atm_strike} CE"
+                            target = round(ltp + TARGET_PTS, 2)
+                            sl = round(ltp - SL_PTS, 2)
+                            state['trade'] = {"type": "BUY", "strike": strike, "entry": ltp, "target": target, "sl": sl}
+                            state['last_signal_time'] = bar_time
+                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
+                            save_state(state)
+                            trade_no = state['today_trade_count']
+                            send_telegram(f"🟢 *NEW SIGNAL: BUY NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Spot Entry: `{ltp}`\n• Target (+30): `{target}`\n• Stop Loss (-30): `{sl}`")
+
+                        elif sell_trigger:
+                            strike = f"{atm_strike} PE"
+                            target = round(ltp - TARGET_PTS, 2)
+                            sl = round(ltp + SL_PTS, 2)
+                            state['trade'] = {"type": "SELL", "strike": strike, "entry": ltp, "target": target, "sl": sl}
+                            state['last_signal_time'] = bar_time
+                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
+                            save_state(state)
+                            trade_no = state['today_trade_count']
+                            send_telegram(f"🔴 *NEW SIGNAL: SELL NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Spot Entry: `{ltp}`\n• Target (-30): `{target}`\n• Stop Loss (+30): `{sl}`")
+
+            except Exception as e:
+                print(f"Loop runtime error: {e}")
+
+        # 03:20 PM - Auto Square-off
+        if current_time_str >= "15:20" and state.get("trade"):
+            try:
+                df = yf.download('^NSEI', period='1d', interval='1m', progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                ltp = round(df.iloc[-1]['Close'], 2)
+            except Exception:
+                ltp = state['trade']['entry']
+
+            trade = state['trade']
+            strike = trade.get('strike', '-')
+            pnl = round((ltp - trade['entry']) if trade['type'] == "BUY" else (trade['entry'] - ltp), 2)
+            log_trade({
+                "date": today_date_str,
+                "time": current_time_str,
+                "type": trade['type'],
+                "strike": strike,
+                "entry": trade['entry'],
+                "exit": ltp,
+                "reason": "Intraday Auto Square-off (3:20 PM)",
+                "pnl": pnl
+            })
+            send_telegram(f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n• Position: `{trade['type']} NIFTY`\n• Strike: `{strike}`\n• Entry: `{trade['entry']}`\n• Exit: `{ltp}`\n• PnL: `{pnl:+} pts`")
+            state['trade'] = None
+            save_state(state)
+
+        # 03:40 PM - Daily & Monthly Reports Dispatched to Telegram & Email
+        if current_time_str >= "15:40" and not state.get("daily_report_sent"):
+            daily_pdf = generate_pdf("Daily")
+            send_telegram_file(daily_pdf, "Daily Trading Performance Report")
+            send_email_with_pdf(daily_pdf, "Daily P&L Report")
+
+            if is_monthly_expiry_today():
+                monthly_pdf = generate_pdf("Monthly")
+                send_telegram_file(monthly_pdf, "Monthly Expiry Detailed P&L Report")
+                send_email_with_pdf(monthly_pdf, "Monthly Expiry Detailed Report")
+
+            state["daily_report_sent"] = True
+            save_state(state)
+            print("Today's operations completed successfully.")
+            break
+
+        time.sleep(15)
 
 if __name__ == "__main__":
-    run_continuous_bot()
+    run_trading_bot()
