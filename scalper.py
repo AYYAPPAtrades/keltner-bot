@@ -202,10 +202,10 @@ def generate_pdf(report_type="Daily"):
             with open(DATA_LOG_FILE, "r") as f:
                 all_trades = json.load(f)
                 if report_type == "Daily":
-                    trades = [t for t in all_trades if t.get('date') == today_str]
+                    trades = [t for t in all_trades if t.get('date'] == today_str] if isinstance(all_trades, list) else []
                 else:
                     curr_month = datetime.now(IST).strftime("%Y-%m")
-                    trades = [t for t in all_trades if str(t.get('date', '')).startswith(curr_month)]
+                    trades = [t for t in all_trades if str(t.get('date', '')).startswith(curr_month)] if isinstance(all_trades, list) else []
         except Exception as e:
             print(f"Error reading log file for PDF: {e}")
 
@@ -280,7 +280,7 @@ def run_trading_bot():
         save_state(state)
 
     start_time_str = now_ist.strftime("%I:%M %p")
-    start_msg = f"🤖 *Bot Started Successfully*\nTime: `{start_time_str}`\nContinuous Scalping Engine (09:00 AM - 03:40 PM) Active."
+    start_msg = f"🤖 Bot Started Successfully\nTime: {start_time_str}\nContinuous Scalping Engine Active."
     
     print("Sending startup alert to Admin...")
     send_telegram(start_msg, admin_only=True)
@@ -294,13 +294,7 @@ def run_trading_bot():
         if "09:05" <= current_time_str < "09:10" and not state.get("sr_sent"):
             p, r1, r2, s1, s2 = get_daily_levels()
             if p > 0:
-                msg = f"""📈 *NIFTY 50 DAILY LEVELS*
-
-🔴 Resistance 2 (R2): `{r2}`
-🔴 Resistance 1 (R1): `{r1}`
-⚪ Pivot Point: `{p}`
-🟢 Support 1 (S1): `{s1}`
-🟢 Support 2 (S2): `{s2}`"""
+                msg = f"📈 NIFTY 50 DAILY LEVELS\n\nR2: {r2}\nR1: {r1}\nPivot: {p}\nS1: {s1}\nS2: {s2}"
                 send_telegram(msg, admin_only=False)
                 state["sr_sent"] = True
                 save_state(state)
@@ -359,111 +353,17 @@ def run_trading_bot():
                             if not state.get("t1_hit") and ltp >= trade['t1']:
                                 state["t1_hit"] = True
                                 save_state(state)
-                                send_telegram(f"🎯 *TARGET 1 HIT (+30 PTS) (BUY)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+                                send_telegram(f"🎯 TARGET 1 HIT (+30 PTS) (BUY)\n• Strike: {strike}\n• LTP: {ltp}")
                             
                             if not state.get("t2_hit") and ltp >= trade['t2']:
                                 state["t2_hit"] = True
                                 save_state(state)
-                                send_telegram(f"🚀 *TARGET 2 HIT (+60 PTS) (BUY)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+                                send_telegram(f"🚀 TARGET 2 HIT (+60 PTS) (BUY)\n• Strike: {strike}\n• LTP: {ltp}")
 
                             if ltp >= trade['t3']:
                                 pnl = round(ltp - trade['entry'], 2)
                                 log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 3 (+90) Hit", "pnl": pnl})
-                                send_telegram(f"🔥 *TARGET 3 HIT (+90 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts`")
+                                send_telegram(f"🔥 TARGET 3 HIT (+90 PTS) (BUY)\n• Strike: {strike}\n• Exit Price: {ltp}\n• PnL: +{pnl} pts")
                                 state['trade'] = None
                                 state["t1_hit"] = False
                                 state["t2_hit"] = False
-                                save_state(state)
-
-                            elif ltp <= trade['sl']:
-                                pnl = round(ltp - trade['entry'], 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss Hit", "pnl": pnl})
-                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
-                                save_state(state)
-
-                        elif trade['type'] == "SELL":
-                            if not state.get("t1_hit") and ltp <= trade['t1']:
-                                state["t1_hit"] = True
-                                save_state(state)
-                                send_telegram(f"🎯 *TARGET 1 HIT (+30 PTS) (SELL)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
-                            
-                            if not state.get("t2_hit") and ltp <= trade['t2']:
-                                state["t2_hit"] = True
-                                save_state(state)
-                                send_telegram(f"🚀 *TARGET 2 HIT (+60 PTS) (SELL)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
-
-                            if ltp <= trade['t3']:
-                                pnl = round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 3 (+90) Hit", "pnl": pnl})
-                                send_telegram(f"🔥 *TARGET 3 HIT (+90 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts`")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
-                                save_state(state)
-
-                            elif ltp >= trade['sl']:
-                                pnl = round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss Hit", "pnl": pnl})
-                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
-                                save_state(state)
-
-                    # ----- ENTRY TRIGGER -----
-                    if is_trading_window:
-                        if buy_trigger:
-                            if trade is not None:
-                                # Exit previous trade if new signal arrives
-                                pnl = round(ltp - trade['entry'], 2) if trade['type'] == "BUY" else round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": trade['type'], "strike": trade['strike'], "entry": trade['entry'], "exit": ltp, "reason": "New Signal Exit", "pnl": pnl})
-                                send_telegram(f"🔄 *EXIT PREVIOUS POSITION (New Signal)*\n• Exit Price: `{ltp}`\n• PnL: `{pnl:+} pts`")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
-                                save_state(state)
-
-                            strike = f"{atm_strike} CE"
-                            t1 = round(ltp + TARGET_PTS_1, 2)
-                            t2 = round(ltp + TARGET_PTS_2, 2)
-                            t3 = round(ltp + TARGET_PTS_3, 2)
-                            sl = round(ltp - SL_PTS, 2)
-
-                            state['trade'] = {"type": "BUY", "strike": strike, "entry": ltp, "t1": t1, "t2": t2, "t3": t3, "sl": sl}
-                            state['last_signal_time'] = bar_time
-                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
-                            state["t1_hit"] = False
-                            state["t2_hit"] = False
-                            save_state(state)
-
-                            trade_no = state['today_trade_count']
-                            send_telegram(f"🟢 *NEW SIGNAL: BUY NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Entry: `{ltp}`\n• T1: `{t1}` | T2: `{t2}` | T3: `{t3}`\n• SL: `{sl}`")
-
-                        elif sell_trigger:
-                            if trade is not None:
-                                pnl = round(ltp - trade['entry'], 2) if trade['type'] == "BUY" else round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": trade['type'], "strike": trade['strike'], "entry": trade['entry'], "exit": ltp, "reason": "New Signal Exit", "pnl": pnl})
-                                send_telegram(f"🔄 *EXIT PREVIOUS POSITION (New Signal)*\n• Exit Price: `{ltp}`\n• PnL: `{pnl:+} pts`")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
-                                save_state(state)
-
-                            strike = f"{atm_strike} PE"
-                            t1 = round(ltp - TARGET_PTS_1, 2)
-                            t2 = round(ltp - TARGET_PTS_2, 2)
-                            t3 = round(ltp - TARGET_PTS_3, 2)
-                            sl = round(ltp + SL_PTS, 2)
-
-                            state['trade'] = {"type": "SELL", "strike": strike, "entry": ltp, "t1": t1, "t2": t2, "t3": t3, "sl": sl}
-                            state['last_signal_time'] = bar_time
-                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
-                            state["t1_hit"] = False
-                            state["t2_hit"] = False
-                            save_state(state)
-
-                            trade_no = state['today_trade_count']
-                            send_telegram(f"🔴 *NEW SIGNAL: SELL NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Entry: `{ltp}`\n• T
