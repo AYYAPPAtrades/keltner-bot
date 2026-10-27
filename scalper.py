@@ -17,14 +17,13 @@ from email.mime.base import MIMEBase
 from email import encoders
 import pytz
 
-# ================= 1. CREDENTIALS & CONSTANTS =================
-BOT_TOKEN = "8830008372:AAGaq16u0STxZR1Z9q3qO5Lr1MQD288_9pc"
+# ================= 1. CORRECTED CREDENTIALS & CONSTANTS =================
+BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDPwJ5ZzA8"
 
 ADMIN_CHAT_ID = "6789591588"
 TELEGRAM_CHAT_IDS = [
-    "8996427731",
     "6789591588",
-    "-1004399032148"
+    "-1004416495917"  # Updated Channel/Group ID from your screenshot
 ]
 
 ADMIN_EMAIL = "Shinos99@gmail.com"
@@ -77,7 +76,7 @@ def send_telegram(message, admin_only=False):
         payload = {"chat_id": cid, "text": formatted_msg, "parse_mode": "Markdown"}
         try:
             res = requests.post(url, json=payload, timeout=10)
-            print(f"DEBUG - Telegram to {cid}: Status {res.status_code}")
+            print(f"DEBUG - Telegram to {cid}: Status {res.status_code}, Response: {res.text}")
         except Exception as e:
             print(f"DEBUG - Telegram Error for {cid}: {e}")
 
@@ -88,7 +87,8 @@ def send_telegram_file(file_path, caption):
         post_data = {"chat_id": cid, "caption": caption_text, "parse_mode": "Markdown"}
         try:
             with open(file_path, 'rb') as f:
-                requests.post(url, data=post_data, files={'document': f}, timeout=25)
+                res = requests.post(url, data=post_data, files={'document': f}, timeout=25)
+                print(f"DEBUG - File Send to {cid}: Status {res.status_code}, Response: {res.text}")
         except Exception as e:
             print(f"Telegram File Send Error: {e}")
 
@@ -363,81 +363,4 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
                                 log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 30 Hit", "pnl": pnl})
                                 state['trade'] = None
                                 save_state(state)
-                                send_telegram(f"🎯 *TARGET HIT (+30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts` 🚀")
-                            elif ltp >= trade['sl']:
-                                pnl = round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss 30 Hit", "pnl": pnl})
-                                state['trade'] = None
-                                save_state(state)
-                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
-
-                    if state.get("trade") is None and is_trading_window:
-                        if buy_trigger:
-                            strike = f"{atm_strike} CE"
-                            target = round(ltp + TARGET_PTS, 2)
-                            sl = round(ltp - SL_PTS, 2)
-                            state['trade'] = {"type": "BUY", "strike": strike, "entry": ltp, "target": target, "sl": sl}
-                            state['last_signal_time'] = bar_time
-                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
-                            save_state(state)
-                            trade_no = state['today_trade_count']
-                            send_telegram(f"🟢 *NEW SIGNAL: BUY NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Spot Entry: `{ltp}`\n• Target (+30): `{target}`\n• Stop Loss (-30): `{sl}`")
-                        elif sell_trigger:
-                            strike = f"{atm_strike} PE"
-                            target = round(ltp - TARGET_PTS, 2)
-                            sl = round(ltp + SL_PTS, 2)
-                            state['trade'] = {"type": "SELL", "strike": strike, "entry": ltp, "target": target, "sl": sl}
-                            state['last_signal_time'] = bar_time
-                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
-                            save_state(state)
-                            trade_no = state['today_trade_count']
-                            send_telegram(f"🔴 *NEW SIGNAL: SELL NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Spot Entry: `{ltp}`\n• Target (-30): `{target}`\n• Stop Loss (+30): `{sl}`")
-
-            except Exception as e:
-                print(f"Loop runtime error: {e}")
-
-        if current_time_str >= "15:20" and state.get("trade"):
-            try:
-                df = yf.download('^NSEI', period='1d', interval='1m', progress=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                ltp = round(df.iloc[-1]['Close'], 2)
-            except Exception:
-                ltp = state['trade']['entry']
-
-            trade = state['trade']
-            strike = trade.get('strike', '-')
-            pnl = round((ltp - trade['entry']) if trade['type'] == "BUY" else (trade['entry'] - ltp), 2)
-            log_trade({
-                "date": today_date_str,
-                "time": current_time_str,
-                "type": trade['type'],
-                "strike": strike,
-                "entry": trade['entry'],
-                "exit": ltp,
-                "reason": "Intraday Auto Square-off (3:20 PM)",
-                "pnl": pnl
-            })
-            send_telegram(f"⏰ *INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n• Position: `{trade['type']} NIFTY`\n• Strike: `{strike}`\n• Entry: `{trade['entry']}`\n• Exit: `{ltp}`\n• PnL: `{pnl:+} pts`")
-            state['trade'] = None
-            save_state(state)
-
-        if current_time_str >= "15:40" and not state.get("daily_report_sent"):
-            daily_pdf = generate_pdf("Daily")
-            send_telegram_file(daily_pdf, "Daily Trading Performance Report")
-            send_email_with_pdf(daily_pdf, "Daily P&L Report")
-
-            if is_monthly_expiry_today():
-                monthly_pdf = generate_pdf("Monthly")
-                send_telegram_file(monthly_pdf, "Monthly Expiry Detailed P&L Report")
-                send_email_with_pdf(monthly_pdf, "Monthly Expiry Detailed Report")
-
-            state["daily_report_sent"] = True
-            save_state(state)
-            print("Today's operations completed successfully.")
-            break
-
-        time.sleep(15)
-
-if __name__ == "__main__":
-    run_trading_bot()
+                                send_
