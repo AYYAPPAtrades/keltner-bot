@@ -67,18 +67,19 @@ def is_today_monthly_expiry():
     expiry_date = get_monthly_expiry_date(today.year, today.month)
     return today == expiry_date
 
-# ================= 3. TELEGRAM & EMAIL UTILS (DEBUG ENABLED) =================
+# ================= 3. TELEGRAM & EMAIL UTILS (WITH FORCE DEBUG) =================
 def send_telegram(message, admin_only=False):
     target_chats = [ADMIN_CHAT_ID] if admin_only else TELEGRAM_CHAT_IDS
     formatted_msg = f"⚡ *SAS LEVEL TRACKER* ⚡\n\n{message}"
+    
     for cid in target_chats:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": cid, "text": formatted_msg, "parse_mode": "Markdown"}
         try:
-            res = requests.post(url, json=payload, timeout=8)
-            print(f"Telegram response for {cid}: {res.status_code}, {res.text}")
+            res = requests.post(url, json=payload, timeout=10)
+            print(f"DEBUG - Telegram to {cid}: Status {res.status_code}, Response: {res.text}")
         except Exception as e:
-            print(f"Telegram Error for {cid}: {e}")
+            print(f"DEBUG - Telegram Connection Error for {cid}: {e}")
 
 def send_telegram_file(file_path, caption):
     caption_text = f"📊 *SAS LEVEL TRACKER*\n{caption}"
@@ -87,7 +88,8 @@ def send_telegram_file(file_path, caption):
         post_data = {"chat_id": cid, "caption": caption_text, "parse_mode": "Markdown"}
         try:
             with open(file_path, 'rb') as f:
-                requests.post(url, data=post_data, files={'document': f}, timeout=25)
+                res = requests.post(url, data=post_data, files={'document': f}, timeout=25)
+                print(f"DEBUG - File Send to {cid}: Status {res.status_code}, Response: {res.text}")
         except Exception as e:
             print(f"Telegram File Send Error: {e}")
 
@@ -144,7 +146,7 @@ def git_commit_push(filename):
         subprocess.run(["git", "config", "--global", "user.email", "bot@github.com"], check=True)
         subprocess.run(["git", "config", "--global", "user.name", "SAS Trading Bot"], check=True)
         subprocess.run(["git", "add", filename], check=True)
-        subprocess.run(["git", "commit", -m, f"Auto-backup: update {filename}"], check=True)
+        subprocess.run(["git", "commit", "-m", f"Auto-backup: update {filename}"], check=True)
         subprocess.run(["git", "push"], check=True)
         print(f"Successfully committed and pushed {filename} to GitHub.")
     except Exception as e:
@@ -273,7 +275,7 @@ def run_trading_bot():
 Time: `{start_time_str}`
 Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
     
-    # Send Start Alert to Admin immediately
+    print("Sending startup alert to Telegram...")
     send_telegram(start_msg, admin_only=True)
     print(f"SAS LEVEL TRACKER System Running at {start_time_str}...")
 
