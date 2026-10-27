@@ -11,19 +11,23 @@ import pandas as pd
 import ta
 import yfinance as yf
 from datetime import datetime, date, timedelta, time as dtime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 import pytz
 
-# ================= 1. CORRECTED CREDENTIALS & CONSTANTS =================
+# ================= 1. CREDENTIALS & CONSTANTS =================
 BOT_TOKEN = "8804327561:AAECrvtU0MCYB80L0ZchoKy_YDPwJ5ZzA8"
 
 ADMIN_CHAT_ID = "6789591588"
 TELEGRAM_CHAT_IDS = [
     "6789591588",
-    "-1004416495917"  # Updated Channel/Group ID from your screenshot
+    "-1004416495917"
 ]
 
 ADMIN_EMAIL = "Shinos99@gmail.com"
@@ -33,7 +37,9 @@ STATE_FILE = "trade_state.json"
 DATA_LOG_FILE = "trade_history.json"
 IST = pytz.timezone('Asia/Kolkata')
 
-TARGET_PTS = 30.0
+TARGET_PTS_1 = 30.0
+TARGET_PTS_2 = 60.0
+TARGET_PTS_3 = 90.0
 SL_PTS = 30.0
 
 NSE_HOLIDAYS_2026 = {
@@ -76,7 +82,7 @@ def send_telegram(message, admin_only=False):
         payload = {"chat_id": cid, "text": formatted_msg, "parse_mode": "Markdown"}
         try:
             res = requests.post(url, json=payload, timeout=10)
-            print(f"DEBUG - Telegram to {cid}: Status {res.status_code}, Response: {res.text}")
+            print(f"DEBUG - Telegram to {cid}: Status {res.status_code}")
         except Exception as e:
             print(f"DEBUG - Telegram Error for {cid}: {e}")
 
@@ -87,8 +93,7 @@ def send_telegram_file(file_path, caption):
         post_data = {"chat_id": cid, "caption": caption_text, "parse_mode": "Markdown"}
         try:
             with open(file_path, 'rb') as f:
-                res = requests.post(url, data=post_data, files={'document': f}, timeout=25)
-                print(f"DEBUG - File Send to {cid}: Status {res.status_code}, Response: {res.text}")
+                requests.post(url, data=post_data, files={'document': f}, timeout=25)
         except Exception as e:
             print(f"Telegram File Send Error: {e}")
 
@@ -130,7 +135,9 @@ def load_state():
         "last_signal_time": "",
         "today_trade_count": 0,
         "last_trade_date": "",
-        "daily_report_sent": False
+        "daily_report_sent": False,
+        "t1_hit": False,
+        "t2_hit": False
     }
 
 def save_state(state):
@@ -267,14 +274,15 @@ def run_trading_bot():
         state["last_trade_date"] = today_date_str
         state["sr_sent"] = False
         state["daily_report_sent"] = False
+        state["trade"] = None
+        state["t1_hit"] = False
+        state["t2_hit"] = False
         save_state(state)
 
     start_time_str = now_ist.strftime("%I:%M %p")
-    start_msg = f"""🤖 *Bot Started Successfully*
-Time: `{start_time_str}`
-Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
+    start_msg = f"🤖 *Bot Started Successfully*\nTime: `{start_time_str}`\nContinuous Scalping Engine (09:00 AM - 03:40 PM) Active."
     
-    print("Sending startup alert to Telegram...")
+    print("Sending startup alert to Admin...")
     send_telegram(start_msg, admin_only=True)
     print(f"SAS LEVEL TRACKER System Running at {start_time_str}...")
 
@@ -282,6 +290,7 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
         now = datetime.now(IST)
         current_time_str = now.strftime("%H:%M")
 
+        # 09:05 AM Support & Resistance Levels
         if "09:05" <= current_time_str < "09:10" and not state.get("sr_sent"):
             p, r1, r2, s1, s2 = get_daily_levels()
             if p > 0:
@@ -296,6 +305,7 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
                 state["sr_sent"] = True
                 save_state(state)
 
+        # 09:15 AM to 03:20 PM - Continuous Engine
         if "09:15" <= current_time_str < "15:20":
             try:
                 df = yf.download('^NSEI', period='5d', interval='2m', progress=False)
@@ -342,25 +352,118 @@ Strategy: Price + Volume + EMA (5, 10, 20, 50, 200) Active."""
                         (state.get("last_signal_time") != bar_time)
                     )
 
+                    # ----- ACTIVE TRADE MONITORING -----
                     if trade:
                         strike = trade.get('strike', f"{atm_strike} CE")
                         if trade['type'] == "BUY":
-                            if ltp >= trade['target']:
-                                pnl = round(ltp - trade['entry'], 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 30 Hit", "pnl": pnl})
-                                state['trade'] = None
+                            if not state.get("t1_hit") and ltp >= trade['t1']:
+                                state["t1_hit"] = True
                                 save_state(state)
-                                send_telegram(f"🎯 *TARGET HIT (+30 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts` 🚀")
+                                send_telegram(f"🎯 *TARGET 1 HIT (+30 PTS) (BUY)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+                            
+                            if not state.get("t2_hit") and ltp >= trade['t2']:
+                                state["t2_hit"] = True
+                                save_state(state)
+                                send_telegram(f"🚀 *TARGET 2 HIT (+60 PTS) (BUY)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+
+                            if ltp >= trade['t3']:
+                                pnl = round(ltp - trade['entry'], 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 3 (+90) Hit", "pnl": pnl})
+                                send_telegram(f"🔥 *TARGET 3 HIT (+90 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts`")
+                                state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
+                                save_state(state)
+
                             elif ltp <= trade['sl']:
                                 pnl = round(ltp - trade['entry'], 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss 30 Hit", "pnl": pnl})
-                                state['trade'] = None
-                                save_state(state)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss Hit", "pnl": pnl})
                                 send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (BUY)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
-                        elif trade['type'] == "SELL":
-                            if ltp <= trade['target']:
-                                pnl = round(trade['entry'] - ltp, 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 30 Hit", "pnl": pnl})
                                 state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
                                 save_state(state)
-                                send_
+
+                        elif trade['type'] == "SELL":
+                            if not state.get("t1_hit") and ltp <= trade['t1']:
+                                state["t1_hit"] = True
+                                save_state(state)
+                                send_telegram(f"🎯 *TARGET 1 HIT (+30 PTS) (SELL)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+                            
+                            if not state.get("t2_hit") and ltp <= trade['t2']:
+                                state["t2_hit"] = True
+                                save_state(state)
+                                send_telegram(f"🚀 *TARGET 2 HIT (+60 PTS) (SELL)*\n• Strike: `{strike}`\n• LTP: `{ltp}`")
+
+                            if ltp <= trade['t3']:
+                                pnl = round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 3 (+90) Hit", "pnl": pnl})
+                                send_telegram(f"🔥 *TARGET 3 HIT (+90 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `+{pnl} pts`")
+                                state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
+                                save_state(state)
+
+                            elif ltp >= trade['sl']:
+                                pnl = round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": "SELL", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Stop Loss Hit", "pnl": pnl})
+                                send_telegram(f"🛑 *STOP LOSS HIT (-30 PTS) (SELL)*\n• Strike: `{strike}`\n• Exit Price: `{ltp}`\n• PnL: `{pnl} pts`")
+                                state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
+                                save_state(state)
+
+                    # ----- ENTRY TRIGGER -----
+                    if is_trading_window:
+                        if buy_trigger:
+                            if trade is not None:
+                                # Exit previous trade if new signal arrives
+                                pnl = round(ltp - trade['entry'], 2) if trade['type'] == "BUY" else round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": trade['type'], "strike": trade['strike'], "entry": trade['entry'], "exit": ltp, "reason": "New Signal Exit", "pnl": pnl})
+                                send_telegram(f"🔄 *EXIT PREVIOUS POSITION (New Signal)*\n• Exit Price: `{ltp}`\n• PnL: `{pnl:+} pts`")
+                                state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
+                                save_state(state)
+
+                            strike = f"{atm_strike} CE"
+                            t1 = round(ltp + TARGET_PTS_1, 2)
+                            t2 = round(ltp + TARGET_PTS_2, 2)
+                            t3 = round(ltp + TARGET_PTS_3, 2)
+                            sl = round(ltp - SL_PTS, 2)
+
+                            state['trade'] = {"type": "BUY", "strike": strike, "entry": ltp, "t1": t1, "t2": t2, "t3": t3, "sl": sl}
+                            state['last_signal_time'] = bar_time
+                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
+                            state["t1_hit"] = False
+                            state["t2_hit"] = False
+                            save_state(state)
+
+                            trade_no = state['today_trade_count']
+                            send_telegram(f"🟢 *NEW SIGNAL: BUY NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Entry: `{ltp}`\n• T1: `{t1}` | T2: `{t2}` | T3: `{t3}`\n• SL: `{sl}`")
+
+                        elif sell_trigger:
+                            if trade is not None:
+                                pnl = round(ltp - trade['entry'], 2) if trade['type'] == "BUY" else round(trade['entry'] - ltp, 2)
+                                log_trade({"date": today_date_str, "time": current_time_str, "type": trade['type'], "strike": trade['strike'], "entry": trade['entry'], "exit": ltp, "reason": "New Signal Exit", "pnl": pnl})
+                                send_telegram(f"🔄 *EXIT PREVIOUS POSITION (New Signal)*\n• Exit Price: `{ltp}`\n• PnL: `{pnl:+} pts`")
+                                state['trade'] = None
+                                state["t1_hit"] = False
+                                state["t2_hit"] = False
+                                save_state(state)
+
+                            strike = f"{atm_strike} PE"
+                            t1 = round(ltp - TARGET_PTS_1, 2)
+                            t2 = round(ltp - TARGET_PTS_2, 2)
+                            t3 = round(ltp - TARGET_PTS_3, 2)
+                            sl = round(ltp + SL_PTS, 2)
+
+                            state['trade'] = {"type": "SELL", "strike": strike, "entry": ltp, "t1": t1, "t2": t2, "t3": t3, "sl": sl}
+                            state['last_signal_time'] = bar_time
+                            state['today_trade_count'] = state.get("today_trade_count", 0) + 1
+                            state["t1_hit"] = False
+                            state["t2_hit"] = False
+                            save_state(state)
+
+                            trade_no = state['today_trade_count']
+                            send_telegram(f"🔴 *NEW SIGNAL: SELL NIFTY (Trade #{trade_no})*\n• Option Strike: `{strike}`\n• Entry: `{ltp}`\n• T
