@@ -201,11 +201,12 @@ def generate_pdf(report_type="Daily"):
         try:
             with open(DATA_LOG_FILE, "r") as f:
                 all_trades = json.load(f)
-                if report_type == "Daily":
-                    trades = [t for t in all_trades if t.get('date'] == today_str] if isinstance(all_trades, list) else []
-                else:
-                    curr_month = datetime.now(IST).strftime("%Y-%m")
-                    trades = [t for t in all_trades if str(t.get('date', '')).startswith(curr_month)] if isinstance(all_trades, list) else []
+                if isinstance(all_trades, list):
+                    if report_type == "Daily":
+                        trades = [t for t in all_trades if t.get('date') == today_str]
+                    else:
+                        curr_month = datetime.now(IST).strftime("%Y-%m")
+                        trades = [t for t in all_trades if str(t.get('date', '')).startswith(curr_month)]
         except Exception as e:
             print(f"Error reading log file for PDF: {e}")
 
@@ -353,17 +354,4 @@ def run_trading_bot():
                             if not state.get("t1_hit") and ltp >= trade['t1']:
                                 state["t1_hit"] = True
                                 save_state(state)
-                                send_telegram(f"🎯 TARGET 1 HIT (+30 PTS) (BUY)\n• Strike: {strike}\n• LTP: {ltp}")
-                            
-                            if not state.get("t2_hit") and ltp >= trade['t2']:
-                                state["t2_hit"] = True
-                                save_state(state)
-                                send_telegram(f"🚀 TARGET 2 HIT (+60 PTS) (BUY)\n• Strike: {strike}\n• LTP: {ltp}")
-
-                            if ltp >= trade['t3']:
-                                pnl = round(ltp - trade['entry'], 2)
-                                log_trade({"date": today_date_str, "time": current_time_str, "type": "BUY", "strike": strike, "entry": trade['entry'], "exit": ltp, "reason": "Target 3 (+90) Hit", "pnl": pnl})
-                                send_telegram(f"🔥 TARGET 3 HIT (+90 PTS) (BUY)\n• Strike: {strike}\n• Exit Price: {ltp}\n• PnL: +{pnl} pts")
-                                state['trade'] = None
-                                state["t1_hit"] = False
-                                state["t2_hit"] = False
+                                send_telegram(f"🎯 TARGET 1 HIT (+30 PTS) (BUY)\n• Strike
