@@ -179,8 +179,8 @@ def generate_pdf_report(filename, title, subtitle, trades):
             table_data.append([
                 t.get("date", "-"),
                 t["action"],
-                f"Rs.{t['entry']}",
-                f"Rs.{t['exit']}",
+                f"{t['entry']}",
+                f"{t['exit']}",
                 f"{'+' if pts > 0 else ''}{pts}",
                 t["reason"],
                 t["exit_time"]
@@ -198,7 +198,7 @@ def generate_pdf_report(filename, title, subtitle, trades):
     elements.append(t)
     elements.append(Spacer(1, 20))
 
-    summary_text = f"<b>Net Cumulative P&L (Strict Entry to Exit):</b> {'+' if total_points > 0 else ''}{round(total_points, 2)} Points"
+    summary_text = f"<b>Net Cumulative P&L:</b> {'+' if total_points > 0 else ''}{round(total_points, 2)} Points"
     elements.append(Paragraph(summary_text, styles["Heading2"]))
     doc.build(elements)
     return filename
@@ -236,13 +236,6 @@ def calculate_indicators(df):
     df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
     
     df["VolMA20"] = df["Volume"].rolling(window=20).mean()
-
-    hl2 = (df["High"] + df["Low"]) / 2
-    high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["ATR"] = tr.rolling(10).mean()
     return df
 
 # ================= 8. INTRADAY SCALPING SCANNER =================
@@ -253,7 +246,7 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nIntraday 1-Min Scalping Bot Active.", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nNifty 1-Min Scalping Bot Active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -268,7 +261,7 @@ def process_market_cycle(state):
             c_spot = round(float(df.iloc[-1]["Close"]), 2)
             msg = (
                 f"📊 *NIFTY SCALPING LIVE FEED (9:05 AM)*\n\n"
-                f"• *Current Spot:* Rs.{c_spot}\n"
+                f"• *Current Nifty Spot:* {c_spot}\n"
                 f"• *Strategy:* Price + Volume + EMA (5, 10, 20, 50, 200)"
             )
             send_telegram(msg, target="all")
@@ -280,7 +273,7 @@ def process_market_cycle(state):
             c_spot = round(float(df.iloc[-1]["Close"]), 2)
             active = state.get("active_trade")
             if active:
-                trade_info = f"`{active['action']}` (Entry: Rs.{active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: Rs.' + str(active['spot_sl'])})"
+                trade_info = f"`{active['action']}` (Entry: {active['entry']} | {'T1 Secured 🎯' if active['t1_hit'] else 'Active SL: ' + str(active['spot_sl'])})"
             else:
                 trade_info = "None (Scanning 1-Min Setup)"
 
@@ -295,8 +288,8 @@ def process_market_cycle(state):
 
             hourly_msg = (
                 f"⏱ *HOURLY SCALPING UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (EMA 5,10,20,50,200 + Volume)\n"
-                f"📈 *Nifty Spot:* Rs.{c_spot}\n"
+                f"🟢 *Bot Health:* Active (Nifty Spot Scalping)\n"
+                f"📈 *Nifty Spot:* {c_spot}\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Scalps Closed:* {trades_cnt}"
             )
@@ -313,7 +306,6 @@ def process_market_cycle(state):
         c_low = float(candle["Low"])
         c_vol = float(candle["Volume"])
         vol_ma = float(candle["VolMA20"]) if not np.isnan(candle["VolMA20"]) else c_vol
-        c_atr = float(candle["ATR"]) if not np.isnan(candle["ATR"]) else 15.0
 
         ema5 = float(candle["EMA5"])
         ema10 = float(candle["EMA10"])
@@ -332,9 +324,8 @@ def process_market_cycle(state):
                     active["t1_hit"] = True
                     active["sl_active"] = False
                     msg = (
-                        f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
-                        f"• Spot T1 Hit (Rs.{active['spot_t1']})\n"
-                        f"• Option Strike: `{active['strike']}`\n"
+                        f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED (+30 pts)*\n"
+                        f"• Nifty Spot T1 Hit ({active['spot_t1']})\n"
                         f"• Trade Secured: **Stop Loss Removed**."
                     )
                     send_telegram(msg, target="all")
@@ -343,7 +334,7 @@ def process_market_cycle(state):
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Spot T2 Hit (Rs.{active['spot_t2']})\n• Option Strike: `{active['strike']}`", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED (+60 pts)*\n• Nifty Spot T2 Hit ({active['spot_t2']})", target="all")
                     save_state(state)
 
             if active["t2_hit"] and not active["t3_hit"]:
@@ -351,12 +342,12 @@ def process_market_cycle(state):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit (Rs.{active['spot_t3']})\n• Option Strike: `{active['strike']}`", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT (+90 pts)*\n• Nifty Spot T3 Hit ({active['spot_t3']})", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Target 3 Achieved",
+                        "pnl_points": pnl, "reason": "Target 3 Achieved (+90 pts)",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
@@ -368,60 +359,9 @@ def process_market_cycle(state):
                 if sl_hit:
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Spot SL Hit (Rs.{active['spot_sl']})\n• Option Strike: `{active['strike']}`", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT (-30 pts)*\n• Nifty Spot SL Hit ({active['spot_sl']})", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Stop Loss Hit",
-                        "exit_time": now_ist.strftime("%H:%M")
-                    })
-                    state["active_trade"] = None
-                    save_state(state)
-                    return
-
-        # New Multi-EMA + Volume Strategy Triggers
-        volume_spike = c_vol > (vol_ma * 1.1)
-        buy_trigger = (
-            c_close > ema50 and c_close > ema200 and
-            volume_spike and
-            prev_ema5 <= prev_ema10 and ema5 > ema10 and
-            ema10 > ema20
-        )
-        sell_trigger = (
-            c_close < ema50 and c_close < ema200 and
-            volume_spike and
-            prev_ema5 >= prev_ema10 and ema5 < ema10 and
-            ema10 < ema20
-        )
-
-        new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
-
-        if new_signal:
-            if active is not None:
-                if active["action"] != new_signal:
-                    exit_price = c_close
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *SAS ALERT: SIGNAL REVERSAL ({new_signal}):* Exit previous `{active['action']}` trade at Rs.{exit_price}.", target="all")
-                    log_trade({
-                        "date": today_str, "action": active["action"],
-                        "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": f"Reversal to {new_signal}",
-                        "exit_time": now_ist.strftime("%H:%M")
-                    })
-                    state["active_trade"] = None
-                    save_state(state)
-                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-            else:
-                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-
-    # 3:20 PM Auto Square Off
-    if dtime(15, 20) <= curr_time < dtime(15, 25):
-        if state.get("active_trade") is not None:
-            active = state["active_trade"]
-            exit_price = round(float(df.iloc[-1]["Close"]), 2)
-            pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-            
-            sq_msg = (
-                f"⏰ *SAS ALERT: INTRADAY AUTO-SQUARE OFF (3:20 PM)*\n\n"
-                f"• *Position:* {active['action']} NIFTY\n"
-                f"• *Strike:* `{active
+                        "pnl_points": pnl, "reason": "Stop Loss Hit (-30 pts)",
+                        "
