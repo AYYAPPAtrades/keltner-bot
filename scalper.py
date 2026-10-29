@@ -531,8 +531,8 @@ def process_market_cycle(state):
             save_state(state)
 
 def trigger_entry(action, price, atr, now_ist, state):
-    # ATR അടിസ്ഥാനമാക്കിയോ അല്ലെങ്കിൽ ഫിക്സഡ് പോയിന്റോ ആയി കണക്കാക്കാം. ഇവിടെ ATR അടിസ്ഥാനമാക്കിയും മിനിമം 30 പോയിന്റ് സ്റ്റോപ്പ് ലോസ്/ടാർഗെറ്റും നൽകിയിരിക്കുന്നു.
-    sl_dist = max(round(1.5 * atr, 1), 30.0)
+    # ATR അടിസ്ഥാനമാക്കി
+    sl_dist = max(round(1.5 * atr, 1)
     t1_dist = round(sl_dist * 1.0, 1)
     t2_dist = round(sl_dist * 2.0, 1)
     t3_dist = round(sl_dist * 3.0, 1)
