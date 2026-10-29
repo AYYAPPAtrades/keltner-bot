@@ -229,25 +229,21 @@ def send_email_with_attachment(pdf_path, subject, body_text):
 
 # ================= 7. STRATEGY INDICATORS (Supertrend + EMA + RSI + ATR) =================
 def calculate_indicators(df):
-    # EMAs
     df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
     df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
 
-    # RSI (14)
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # ATR (10) for Stop Loss & Targets
     high_low = df["High"] - df["Low"]
     high_close = np.abs(df["High"] - df["Close"].shift())
     low_close = np.abs(df["Low"] - df["Close"].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df["ATR"] = tr.rolling(10).mean()
 
-    # Supertrend (10, 3)
     hl2 = (df["High"] + df["Low"]) / 2
     atr = df["ATR"]
     upper_basic = hl2 + (3 * atr)
@@ -287,7 +283,7 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nNifty Supertrend + EMA + RSI Scalping Bot Active.", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nATR-based Scalping Bot Active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -303,7 +299,7 @@ def process_market_cycle(state):
             msg = (
                 f"📊 *NIFTY SCALPING LIVE FEED (9:05 AM)*\n\n"
                 f"• *Current Nifty Spot:* {c_spot}\n"
-                f"• *Strategy:* Supertrend + EMA (9,21) + RSI + ATR Method"
+                f"• *Strategy:* Supertrend + EMA + RSI (ATR Method)"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -329,7 +325,7 @@ def process_market_cycle(state):
 
             hourly_msg = (
                 f"⏱ *HOURLY SCALPING UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (Supertrend + EMA + RSI)\n"
+                f"🟢 *Bot Health:* Active (ATR Dynamic Method)\n"
                 f"📈 *Nifty Spot:* {c_spot}\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Scalps Closed:* {trades_cnt}"
@@ -352,62 +348,58 @@ def process_market_cycle(state):
         active = state.get("active_trade")
 
         if active is not None:
-            # T1 Check
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t1"]) or (active["action"] == "SELL" and c_low <= active["spot_t1"]):
                     active["t1_hit"] = True
-                    active["sl_active"] = False  # T1 അടിച്ചു കഴിഞ്ഞാൽ SL ഒഴിവാക്കും
+                    active["sl_active"] = False
                     msg = (
                         f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
-                        f"• Nifty Spot T1 Hit ({active['spot_t1']})\n"
+                        f"• Spot T1 Hit ({active['spot_t1']})\n"
                         f"• Trade Secured: **Stop Loss Removed**."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
 
-            # T2 Check
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Nifty Spot T2 Hit ({active['spot_t2']})", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Spot T2 Hit ({active['spot_t2']})", target="all")
                     save_state(state)
 
-            # T3 Check
             if active["t2_hit"] and not active["t3_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t3"]) or (active["action"] == "SELL" and c_low <= active["spot_t3"]):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Nifty Spot T3 Hit ({active['spot_t3']})", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit ({active['spot_t3']})", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Target 3 Achieved",
+                        "pnl_points": pnl, "reason": "ATR Target 3 Achieved",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
                     save_state(state)
                     return
 
-            # SL Check (T1 അടിക്കുന്നതിന് മുമ്പ് മാത്രം)
             if active["sl_active"]:
                 sl_hit = (active["action"] == "BUY" and c_low <= active["spot_sl"]) or (active["action"] == "SELL" and c_high >= active["spot_sl"])
                 if sl_hit:
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Nifty Spot SL Hit ({active['spot_sl']})", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Spot SL Hit ({active['spot_sl']})", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Stop Loss Hit",
+                        "pnl_points": pnl, "reason": "ATR Stop Loss Hit",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
                     save_state(state)
                     return
 
-        # Strategy Triggers (Supertrend + EMA + RSI)
+        # Strategy Triggers
         buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
         sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
 
@@ -416,7 +408,6 @@ def process_market_cycle(state):
         if new_signal:
             if active is not None:
                 if active["action"] != new_signal:
-                    # പുതിയ സിഗ്നൽ വന്നാൽ പഴയ ട്രേഡ് എക്സിറ്റ് ചെയ്യും
                     exit_price = c_close
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
                     send_telegram(f"🔄 *SAS ALERT: EXIT PREVIOUS POSITION (New Signal {new_signal}):*\n• Exit Price: {exit_price}\n• PnL: {pnl:+} pts", target="all")
@@ -531,8 +522,8 @@ def process_market_cycle(state):
             save_state(state)
 
 def trigger_entry(action, price, atr, now_ist, state):
-    # ATR അടിസ്ഥാനമാക്കി
-    sl_dist = max(round(1.5 * atr, 1)
+    # ATR അടിസ്ഥാനമാക്കിയുള്ള ഡൈനാമിക് SL & Targets (മൊമെന്റം അനുസരിച്ച് മാറും)
+    sl_dist = max(round(1.2 * atr, 1), 20.0)
     t1_dist = round(sl_dist * 1.0, 1)
     t2_dist = round(sl_dist * 2.0, 1)
     t3_dist = round(sl_dist * 3.0, 1)
@@ -602,7 +593,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* Supertrend + EMA + RSI Scalping Bot Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* ATR-based Scalping Bot Active.", target="admin")
 
     state = load_state()
 
