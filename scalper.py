@@ -92,7 +92,7 @@ def get_nifty_candle_data():
 
 # ================= 4. TELEGRAM UTILS =================
 def send_telegram(text: str, target="admin"):
-    header = "📢 *SAS LEVEL TRACKER*\n"
+    header = "⚡ *SAS LEVEL TRACKER* ⚡\n"
     full_text = f"{header}\n{text}"
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
@@ -227,15 +227,56 @@ def send_email_with_attachment(pdf_path, subject, body_text):
     except Exception as e:
         print(f"Failed to send email: {e}")
 
-# ================= 7. SCALPING INDICATORS (EMA 5, 10, 20, 50, 200 + Volume) =================
+# ================= 7. STRATEGY INDICATORS (Supertrend + EMA + RSI + ATR) =================
 def calculate_indicators(df):
-    df["EMA5"] = df["Close"].ewm(span=5, adjust=False).mean()
-    df["EMA10"] = df["Close"].ewm(span=10, adjust=False).mean()
-    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
-    df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
-    df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
+    # EMAs
+    df["EMA9"] = df["Close"].ewm(span=9, adjust=False).mean()
+    df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
+
+    # RSI (14)
+    delta = df["Close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    # ATR (10) for Stop Loss & Targets
+    high_low = df["High"] - df["Low"]
+    high_close = np.abs(df["High"] - df["Close"].shift())
+    low_close = np.abs(df["Low"] - df["Close"].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df["ATR"] = tr.rolling(10).mean()
+
+    # Supertrend (10, 3)
+    hl2 = (df["High"] + df["Low"]) / 2
+    atr = df["ATR"]
+    upper_basic = hl2 + (3 * atr)
+    lower_basic = hl2 - (3 * atr)
     
-    df["VolMA20"] = df["Volume"].rolling(window=20).mean()
+    upper_band = [0.0] * len(df)
+    lower_band = [0.0] * len(df)
+    supertrend = [True] * len(df)
+
+    for i in range(10, len(df)):
+        if upper_basic.iloc[i] < upper_band[i-1] or df["Close"].iloc[i-1] > upper_band[i-1]:
+            upper_band[i] = upper_basic.iloc[i]
+        else:
+            upper_band[i] = upper_band[i-1]
+
+        if lower_basic.iloc[i] > lower_band[i-1] or df["Close"].iloc[i-1] < lower_band[i-1]:
+            lower_band[i] = lower_basic.iloc[i]
+        else:
+            lower_band[i] = lower_band[i-1]
+
+        if i == 10:
+            supertrend[i] = True if df["Close"].iloc[i] > upper_basic.iloc[i] else False
+        else:
+            if supertrend[i-1]:
+                supertrend[i] = False if df["Close"].iloc[i] < lower_band[i] else True
+            else:
+                supertrend[i] = True if df["Close"].iloc[i] > upper_band[i] else False
+
+    df["Supertrend"] = supertrend
     return df
 
 # ================= 8. INTRADAY SCALPING SCANNER =================
@@ -246,12 +287,12 @@ def process_market_cycle(state):
 
     if dtime(9, 0) <= curr_time < dtime(9, 5):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nNifty 1-Min Scalping Bot Active.", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:00 AM):*\nNifty Supertrend + EMA + RSI Scalping Bot Active.", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
     df = get_nifty_candle_data()
-    if df is None or len(df) < 210:
+    if df is None or len(df) < 30:
         return
 
     df = calculate_indicators(df)
@@ -262,7 +303,7 @@ def process_market_cycle(state):
             msg = (
                 f"📊 *NIFTY SCALPING LIVE FEED (9:05 AM)*\n\n"
                 f"• *Current Nifty Spot:* {c_spot}\n"
-                f"• *Strategy:* Price + Volume + EMA (5, 10, 20, 50, 200)"
+                f"• *Strategy:* Supertrend + EMA (9,21) + RSI + ATR Method"
             )
             send_telegram(msg, target="all")
             state["support_sent_today"] = True
@@ -288,7 +329,7 @@ def process_market_cycle(state):
 
             hourly_msg = (
                 f"⏱ *HOURLY SCALPING UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (Nifty Spot Scalping)\n"
+                f"🟢 *Bot Health:* Active (Supertrend + EMA + RSI)\n"
                 f"📈 *Nifty Spot:* {c_spot}\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Scalps Closed:* {trades_cnt}"
@@ -299,111 +340,97 @@ def process_market_cycle(state):
 
     if dtime(9, 15) <= curr_time <= dtime(15, 20):
         candle = df.iloc[-1]
-        prev_candle = df.iloc[-2]
-        
         c_close = float(candle["Close"])
         c_high = float(candle["High"])
         c_low = float(candle["Low"])
-        c_vol = float(candle["Volume"])
-        vol_ma = float(candle["VolMA20"]) if not np.isnan(candle["VolMA20"]) else c_vol
-
-        ema5 = float(candle["EMA5"])
-        ema10 = float(candle["EMA10"])
-        ema20 = float(candle["EMA20"])
-        ema50 = float(candle["EMA50"])
-        ema200 = float(candle["EMA200"])
-        
-        prev_ema5 = float(prev_candle["EMA5"])
-        prev_ema10 = float(prev_candle["EMA10"])
+        c_atr = float(candle["ATR"]) if not np.isnan(candle["ATR"]) else 15.0
+        c_ema9 = float(candle["EMA9"])
+        c_ema21 = float(candle["EMA21"])
+        c_rsi = float(candle["RSI"]) if not np.isnan(candle["RSI"]) else 50.0
+        c_st = bool(candle["Supertrend"])
 
         active = state.get("active_trade")
 
         if active is not None:
+            # T1 Check
             if not active["t1_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t1"]) or (active["action"] == "SELL" and c_low <= active["spot_t1"]):
                     active["t1_hit"] = True
-                    active["sl_active"] = False
+                    active["sl_active"] = False  # T1 അടിച്ചു കഴിഞ്ഞാൽ SL ഒഴിവാക്കും
                     msg = (
-                        f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED (+30 pts)*\n"
+                        f"🎯 *SAS ALERT: TARGET 1 (T1) ACHIEVED!*\n"
                         f"• Nifty Spot T1 Hit ({active['spot_t1']})\n"
                         f"• Trade Secured: **Stop Loss Removed**."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
 
+            # T2 Check
             if active["t1_hit"] and not active["t2_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t2"]) or (active["action"] == "SELL" and c_low <= active["spot_t2"]):
                     active["t2_hit"] = True
-                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED (+60 pts)*\n• Nifty Spot T2 Hit ({active['spot_t2']})", target="all")
+                    send_telegram(f"🚀 *SAS ALERT: TARGET 2 (T2) ACHIEVED!*\n• Nifty Spot T2 Hit ({active['spot_t2']})", target="all")
                     save_state(state)
 
+            # T3 Check
             if active["t2_hit"] and not active["t3_hit"]:
                 if (active["action"] == "BUY" and c_high >= active["spot_t3"]) or (active["action"] == "SELL" and c_low <= active["spot_t3"]):
                     active["t3_hit"] = True
                     exit_price = active["spot_t3"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT (+90 pts)*\n• Nifty Spot T3 Hit ({active['spot_t3']})", target="all")
+                    send_telegram(f"🏆 *SAS ALERT: FINAL TARGET 3 (T3) HIT!*\n• Nifty Spot T3 Hit ({active['spot_t3']})", target="all")
                     
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Target 3 Achieved (+90 pts)",
+                        "pnl_points": pnl, "reason": "Target 3 Achieved",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
                     save_state(state)
                     return
 
+            # SL Check (T1 അടിക്കുന്നതിന് മുമ്പ് മാത്രം)
             if active["sl_active"]:
                 sl_hit = (active["action"] == "BUY" and c_low <= active["spot_sl"]) or (active["action"] == "SELL" and c_high >= active["spot_sl"])
                 if sl_hit:
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT (-30 pts)*\n• Nifty Spot SL Hit ({active['spot_sl']})", target="all")
+                    send_telegram(f"🛑 *SAS ALERT: STOP LOSS HIT!*\n• Nifty Spot SL Hit ({active['spot_sl']})", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": "Stop Loss Hit (-30 pts)",
+                        "pnl_points": pnl, "reason": "Stop Loss Hit",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
                     save_state(state)
                     return
 
-        # Multi-EMA + Volume Strategy Triggers
-        volume_spike = c_vol > (vol_ma * 1.1)
-        buy_trigger = (
-            c_close > ema50 and c_close > ema200 and
-            volume_spike and
-            prev_ema5 <= prev_ema10 and ema5 > ema10 and
-            ema10 > ema20
-        )
-        sell_trigger = (
-            c_close < ema50 and c_close < ema200 and
-            volume_spike and
-            prev_ema5 >= prev_ema10 and ema5 < ema10 and
-            ema10 < ema20
-        )
+        # Strategy Triggers (Supertrend + EMA + RSI)
+        buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
+        sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
 
         new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
 
         if new_signal:
             if active is not None:
                 if active["action"] != new_signal:
+                    # പുതിയ സിഗ്നൽ വന്നാൽ പഴയ ട്രേഡ് എക്സിറ്റ് ചെയ്യും
                     exit_price = c_close
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *SAS ALERT: SIGNAL REVERSAL ({new_signal}):* Exit previous `{active['action']}` trade at {exit_price}.", target="all")
+                    send_telegram(f"🔄 *SAS ALERT: EXIT PREVIOUS POSITION (New Signal {new_signal}):*\n• Exit Price: {exit_price}\n• PnL: {pnl:+} pts", target="all")
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": f"Reversal to {new_signal}",
+                        "pnl_points": pnl, "reason": f"Exit on New Signal {new_signal}",
                         "exit_time": now_ist.strftime("%H:%M")
                     })
                     state["active_trade"] = None
                     save_state(state)
-                    trigger_entry(new_signal, c_close, now_ist, state)
+                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
             else:
-                trigger_entry(new_signal, c_close, now_ist, state)
+                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 3:20 PM Auto Square Off
     if dtime(15, 20) <= curr_time < dtime(15, 25):
@@ -503,11 +530,12 @@ def process_market_cycle(state):
             state["monthly_report_sent_today"] = True
             save_state(state)
 
-def trigger_entry(action, price, now_ist, state):
-    sl_dist = 30.0
-    t1_dist = 30.0
-    t2_dist = 60.0
-    t3_dist = 90.0
+def trigger_entry(action, price, atr, now_ist, state):
+    # ATR അടിസ്ഥാനമാക്കിയോ അല്ലെങ്കിൽ ഫിക്സഡ് പോയിന്റോ ആയി കണക്കാക്കാം. ഇവിടെ ATR അടിസ്ഥാനമാക്കിയും മിനിമം 30 പോയിന്റ് സ്റ്റോപ്പ് ലോസ്/ടാർഗെറ്റും നൽകിയിരിക്കുന്നു.
+    sl_dist = max(round(1.5 * atr, 1), 30.0)
+    t1_dist = round(sl_dist * 1.0, 1)
+    t2_dist = round(sl_dist * 2.0, 1)
+    t3_dist = round(sl_dist * 3.0, 1)
 
     entry = round(price, 2)
 
@@ -525,15 +553,12 @@ def trigger_entry(action, price, now_ist, state):
         icon = "🔴"
 
     msg = (
-        f"⚡ *SAS ALERT*\n\n"
-        f"• *Instrument:* NIFTY 50 SPOT\n"
-        f"• *Action:* {icon} *{action}*\n\n"
-        f"📌 *NIFTY SPOT ENTRY & TARGETS:*\n"
+        f"⚡ *NEW SIGNAL: {action} NIFTY SPOT*\n\n"
         f"• *Spot Entry:* {entry}\n"
-        f"• *Spot T1 (+30):* {spot_t1}\n"
-        f"• *Spot T2 (+60):* {spot_t2}\n"
-        f"• *Spot T3 (+90):* {spot_t3}\n"
-        f"• *Spot SL (-30):* {spot_sl}\n"
+        f"• *Target 1 (T1):* {spot_t1}\n"
+        f"• *Target 2 (T2):* {spot_t2}\n"
+        f"• *Target 3 (T3):* {spot_t3}\n"
+        f"• *Stop Loss (SL):* {spot_sl}\n"
         f"• *Time:* {now_ist.strftime('%H:%M:%S')} IST"
     )
     send_telegram(msg, target="all")
@@ -577,7 +602,7 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* Nifty Spot Scalping Bot Active.", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* Supertrend + EMA + RSI Scalping Bot Active.", target="admin")
 
     state = load_state()
 
