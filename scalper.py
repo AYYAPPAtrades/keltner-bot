@@ -142,7 +142,8 @@ def load_state():
         "daily_report_sent_today": False,
         "monthly_report_sent_today": False,
         "startup_alert_sent": False,
-        "last_hourly_alert_hour": None
+        "last_hourly_alert_hour": None,
+        "last_exit_timestamp": None
     }
 
 def save_state(state):
@@ -291,10 +292,10 @@ def process_market_cycle(state):
     curr_time = now_ist.time()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    # 9:30 AM Startup Alert
-    if dtime(9, 30) <= curr_time < dtime(9, 35):
+    # 9:25 AM Startup Alert
+    if dtime(9, 25) <= curr_time < dtime(9, 30):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:30 AM):*\nATR-based Scalping Bot Active (09:30 AM - 03:00 PM).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (9:25 AM):*\nATR-based Scalping Bot Active (09:30 AM - 03:00 PM).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -333,7 +334,7 @@ def process_market_cycle(state):
             state["last_hourly_alert_hour"] = now_ist.hour
             save_state(state)
 
-    # Trading Window: 9:30 AM to 3:00 PM
+    # Strict Trading Window: 9:30 AM to 3:00 PM
     if dtime(9, 30) <= curr_time <= dtime(15, 0):
         candle = df.iloc[-1]
         c_close = float(candle["Close"])
@@ -373,6 +374,9 @@ def process_market_cycle(state):
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
                     send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit ({active['spot_t3']})", target="all")
                     
+                    # Record exit timestamp for Cooldown (T3 Hit)
+                    state["last_exit_timestamp"] = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -389,6 +393,10 @@ def process_market_cycle(state):
                     exit_price = active["spot_sl"]
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
                     send_telegram(f"🛑 *STOP LOSS HIT!*\n• Spot SL Hit ({active['spot_sl']})", target="all")
+                    
+                    # Record exit timestamp for Cooldown (SL Hit)
+                    state["last_exit_timestamp"] = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+
                     log_trade({
                         "date": today_str, "action": active["action"],
                         "entry": active["entry"], "exit": exit_price,
@@ -399,28 +407,25 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Strategy Triggers
-        buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
-        sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
+        # Cooldown check (5 minutes after SL or T3 exit)
+        in_cooldown = False
+        if state.get("last_exit_timestamp"):
+            try:
+                last_exit_dt = datetime.strptime(state["last_exit_timestamp"], "%Y-%m-%d %H:%M:%S")
+                last_exit_dt = IST.localize(last_exit_dt)
+                if (now_ist - last_exit_dt).total_seconds() < 300: # 5 minutes cooldown
+                    in_cooldown = True
+            except Exception:
+                pass
 
-        new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
+        # Strategy Triggers (Only if not in cooldown and no active trade)
+        if not in_cooldown and active is None:
+            buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
+            sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
 
-        if new_signal:
-            if active is not None:
-                if active["action"] != new_signal:
-                    exit_price = c_close
-                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
-                    send_telegram(f"🔄 *EXIT PREVIOUS POSITION (New Signal {new_signal}):*\n• Exit Price: {exit_price}\n• PnL: {pnl:+} pts", target="all")
-                    log_trade({
-                        "date": today_str, "action": active["action"],
-                        "entry": active["entry"], "exit": exit_price,
-                        "pnl_points": pnl, "reason": f"Exit on New Signal {new_signal}",
-                        "exit_time": now_ist.strftime("%H:%M")
-                    })
-                    state["active_trade"] = None
-                    save_state(state)
-                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
-            else:
+            new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
+
+            if new_signal:
                 trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 3:00 PM Auto Square Off
@@ -584,7 +589,7 @@ def main():
 
     state = load_state()
 
-    # Continuous Auto Run Loop (09:30 AM to 03:15 PM)
+    # Continuous Auto Run Loop (09:25 AM to 03:15 PM)
     while True:
         try:
             now_ist = datetime.now(IST)
@@ -595,7 +600,7 @@ def main():
                 send_telegram("🛑 *SYSTEM SHUTDOWN (3:15 PM):* Daily session completed successfully.", target="admin")
                 break
 
-            if dtime(9, 28) <= curr_time <= dtime(15, 15):
+            if dtime(9, 25) <= curr_time <= dtime(15, 15):
                 process_market_cycle(state)
                 time.sleep(5)  # Every 5 seconds check for real-time scalping
             else:
