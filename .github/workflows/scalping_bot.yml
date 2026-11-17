@@ -1,28 +1,25 @@
-name: Nifty Trading Bot Runner
+name: SAS LEVEL TRACKER Bot
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '55 3 * * 1-5'
+    - cron: '45 3 * * 1-5'  # Mon-Fri at 03:45 AM UTC (09:15 AM IST)
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 420
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install yfinance pandas reportlab pytz requests numpy
+          pip install requests pandas numpy yfinance pytz reportlab
 
-      - name: Run Scalper Bot
+      - name: Run Scalping Bot
         run: python scalper.py
