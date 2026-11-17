@@ -143,7 +143,8 @@ def load_state():
         "monthly_report_sent_today": False,
         "startup_alert_sent": False,
         "last_hourly_alert_hour": None,
-        "last_exit_timestamp": None
+        "last_exit_timestamp": None,
+        "last_exit_reason": None
     }
 
 def save_state(state):
@@ -374,8 +375,8 @@ def process_market_cycle(state):
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
                     send_telegram(f"🏆 *FINAL TARGET 3 (T3) HIT!*\n• Spot T3 Hit ({active['spot_t3']})", target="all")
                     
-                    # Record exit timestamp for Cooldown (T3 Hit)
                     state["last_exit_timestamp"] = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+                    state["last_exit_reason"] = "T3"
 
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -394,8 +395,8 @@ def process_market_cycle(state):
                     pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
                     send_telegram(f"🛑 *STOP LOSS HIT!*\n• Spot SL Hit ({active['spot_sl']})", target="all")
                     
-                    # Record exit timestamp for Cooldown (SL Hit)
                     state["last_exit_timestamp"] = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+                    state["last_exit_reason"] = "SL"
 
                     log_trade({
                         "date": today_str, "action": active["action"],
@@ -407,32 +408,45 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Cooldown check (5 minutes after SL or T3 exit)
+        # Cooldown check (Only applies if last exit was SL or T3)
         in_cooldown = False
-        if state.get("last_exit_timestamp"):
+        if state.get("last_exit_timestamp") and state.get("last_exit_reason") in ["SL", "T3"]:
             try:
                 last_exit_dt = datetime.strptime(state["last_exit_timestamp"], "%Y-%m-%d %H:%M:%S")
                 last_exit_dt = IST.localize(last_exit_dt)
-                if (now_ist - last_exit_dt).total_seconds() < 300: # 5 minutes cooldown
+                if (now_ist - last_exit_dt).total_seconds() < 600:  # 10 minutes cooldown
                     in_cooldown = True
             except Exception:
                 pass
 
-        # Strategy Triggers (Only if not in cooldown and no active trade)
-        if not in_cooldown and active is None:
+        # Strategy Triggers (If no active trade)
+        if active is None:
             buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
             sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
 
             new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
 
             if new_signal:
-                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
+                # If in cooldown (due to SL or T3), block new signal
+                if in_cooldown:
+                    pass  # Cooldown active, skip signal
+                else:
+                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 3:00 PM Auto Square Off
     if dtime(15, 0) <= curr_time < dtime(15, 5):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
-            exit_price = round(float(df.iloc[-1]["Close"]), 2)
+            if active.get("t2_hit"):
+                exit_price = active["spot_t2"]
+                reason_str = "Intraday Close (T2 Reached)"
+            elif active.get("t1_hit"):
+                exit_price = active["spot_t1"]
+                reason_str = "Intraday Close (T1 Reached)"
+            else:
+                exit_price = round(float(df.iloc[-1]["Close"]), 2)
+                reason_str = "Intraday Close (3:00 PM)"
+
             pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
             
             sq_msg = (
@@ -447,13 +461,13 @@ def process_market_cycle(state):
             log_trade({
                 "date": today_str, "action": active["action"],
                 "entry": active["entry"], "exit": exit_price,
-                "pnl_points": pnl, "reason": "Intraday Close (3:00 PM)",
+                "pnl_points": pnl, "reason": reason_str,
                 "exit_time": now_ist.strftime("%H:%M")
             })
             state["active_trade"] = None
             save_state(state)
 
-    # 3:05 PM Daily P&L PDF Report & Email (Admin & Joiners)
+    # 3:05 PM Daily P&L PDF Report & Email
     if dtime(15, 5) <= curr_time < dtime(15, 10):
         if not state.get("daily_report_sent_today"):
             all_trades = []
@@ -469,7 +483,7 @@ def process_market_cycle(state):
             generate_pdf_report(
                 pdf_filename,
                 f"SAS LEVEL TRACKER - DAILY NIFTY SPOT REPORT",
-                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Entry to Exit Price",
+                f"<b>Date:</b> {today_str} | <b>Calculation:</b> Target/Exit Based P&L",
                 today_trades
             )
             send_email_with_attachment(
@@ -479,7 +493,6 @@ def process_market_cycle(state):
             )
             net_pts = sum(t["pnl_points"] for t in today_trades)
             
-            # Send PDF Report to Telegram (Admin & Joiners)
             send_telegram_file(pdf_filename, f"Daily Trading Performance Report ({today_str})\n• Total Trades: {len(today_trades)}\n• Net P&L: {'+' if net_pts > 0 else ''}{round(net_pts, 2)} Pts")
             
             state["daily_report_sent_today"] = True
@@ -527,13 +540,11 @@ def trigger_entry(action, price, atr, now_ist, state):
         spot_t1 = round(entry + t1_dist, 2)
         spot_t2 = round(entry + t2_dist, 2)
         spot_t3 = round(entry + t3_dist, 2)
-        icon = "🟢"
     else:
         spot_sl = round(entry + sl_dist, 2)
         spot_t1 = round(entry - t1_dist, 2)
         spot_t2 = round(entry - t2_dist, 2)
         spot_t3 = round(entry - t3_dist, 2)
-        icon = "🔴"
 
     msg = (
         f"⚡ *NEW SIGNAL: {action} NIFTY SPOT*\n\n"
@@ -589,7 +600,6 @@ def main():
 
     state = load_state()
 
-    # Continuous Auto Run Loop (09:25 AM to 03:15 PM)
     while True:
         try:
             now_ist = datetime.now(IST)
@@ -602,7 +612,7 @@ def main():
 
             if dtime(9, 25) <= curr_time <= dtime(15, 15):
                 process_market_cycle(state)
-                time.sleep(5)  # Every 5 seconds check for real-time scalping
+                time.sleep(5)
             else:
                 time.sleep(30)
 
