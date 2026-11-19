@@ -293,10 +293,10 @@ def process_market_cycle(state):
     curr_time = now_ist.time()
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    # 9:25 AM Startup Alert
-    if dtime(9, 25) <= curr_time < dtime(9, 30):
+    # 09:15 AM Startup Alert
+    if dtime(9, 15) <= curr_time < dtime(9, 30):
         if not state.get("startup_alert_sent"):
-            send_telegram("🚀 *MARKET SESSION START (9:25 AM):*\nATR-based Scalping Bot Active (09:30 AM - 03:00 PM).", target="admin")
+            send_telegram("🚀 *MARKET SESSION START (09:15 AM):*\nBot Initialized. Scalping Active (09:30 AM - 03:00 PM).", target="admin")
             state["startup_alert_sent"] = True
             save_state(state)
 
@@ -320,13 +320,13 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
                 except Exception:
                     pass
 
             hourly_msg = (
                 f"⏱ *HOURLY SCALPING UPDATE ({now_ist.strftime('%I:00 %p')})*\n\n"
-                f"🟢 *Bot Health:* Active (Continuous 9:30 AM - 3:00 PM)\n"
+                f"🟢 *Bot Health:* Active\n"
                 f"📈 *Nifty Spot:* {c_spot}\n"
                 f"🔄 *Active Trade:* {trade_info}\n"
                 f"📑 *Today's Scalps Closed:* {trades_cnt}"
@@ -408,18 +408,18 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Cooldown check (Only applies if last exit was SL or T3)
+        # Cooldown check (1 minute cooldown: 60 seconds)
         in_cooldown = False
         if state.get("last_exit_timestamp") and state.get("last_exit_reason") in ["SL", "T3"]:
             try:
                 last_exit_dt = datetime.strptime(state["last_exit_timestamp"], "%Y-%m-%d %H:%M:%S")
                 last_exit_dt = IST.localize(last_exit_dt)
-                if (now_ist - last_exit_dt).total_seconds() < 600:  # 10 minutes cooldown
+                if (now_ist - last_exit_dt).total_seconds() < 60:  # 1 minute cooldown
                     in_cooldown = True
             except Exception:
                 pass
 
-        # Strategy Triggers (If no active trade)
+        # Strategy Triggers
         if active is None:
             buy_trigger = c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
             sell_trigger = (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
@@ -427,13 +427,12 @@ def process_market_cycle(state):
             new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
 
             if new_signal:
-                # If in cooldown (due to SL or T3), block new signal
                 if in_cooldown:
                     pass  # Cooldown active, skip signal
                 else:
                     trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
-    # 3:00 PM Auto Square Off
+    # 3:00 PM Auto Square Off (Target-based Exit Calculation)
     if dtime(15, 0) <= curr_time < dtime(15, 5):
         if state.get("active_trade") is not None:
             active = state["active_trade"]
@@ -596,21 +595,23 @@ def main():
         print(f"Holiday today: {reason}. Exiting.")
         sys.exit(0)
 
-    send_telegram("🚀 *BOT RUNNING:* Continuous ATR Scalping Bot Active (09:30 AM - 03:00 PM).", target="admin")
+    send_telegram("🚀 *BOT RUNNING:* Scalping Service Initialized.", target="admin")
 
     state = load_state()
 
+    # Continuous Auto Run Loop (09:15 AM to 03:12 PM)
     while True:
         try:
             now_ist = datetime.now(IST)
             curr_time = now_ist.time()
 
-            if curr_time > dtime(15, 15):
-                print("Market session completed. Shutting down bot.")
-                send_telegram("🛑 *SYSTEM SHUTDOWN (3:15 PM):* Daily session completed successfully.", target="admin")
+            # Shutdown safely at 03:12 PM (Before GitHub Actions 6-hour limit)
+            if curr_time > dtime(15, 12):
+                print("Market session completed. Shutting down bot safely.")
+                send_telegram("🛑 *SYSTEM SHUTDOWN (3:12 PM):* Daily session completed successfully.", target="admin")
                 break
 
-            if dtime(9, 25) <= curr_time <= dtime(15, 15):
+            if dtime(9, 15) <= curr_time <= dtime(15, 12):
                 process_market_cycle(state)
                 time.sleep(5)
             else:
