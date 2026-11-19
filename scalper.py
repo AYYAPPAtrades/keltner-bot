@@ -320,7 +320,7 @@ def process_market_cycle(state):
                 try:
                     with open(HISTORY_FILE, "r") as f:
                         h_trades = json.load(f)
-                        trades_cnt = len([t for t in h_trades if t.get("date"] == today_str])
+                        trades_cnt = len([t for t in h_trades if t.get("date") == today_str])
                 except Exception:
                     pass
 
@@ -357,7 +357,7 @@ def process_market_cycle(state):
                     msg = (
                         f"🎯 *TARGET 1 (T1) ACHIEVED!*\n"
                         f"• Spot T1 Hit ({active['spot_t1']})\n"
-                        f"• Trade Secured: **Stop Loss Removed**."
+                        f"• Trade Secured: *Stop Loss Removed*."
                     )
                     send_telegram(msg, target="all")
                     save_state(state)
@@ -408,13 +408,46 @@ def process_market_cycle(state):
                     save_state(state)
                     return
 
-        # Cooldown check (1 minute cooldown: 60 seconds)
+            # Trend reversal exit if T1 or T2 already achieved
+            if active.get("t1_hit") or active.get("t2_hit"):
+                reversal_sell = (active["action"] == "BUY") and (not c_st) and (c_close < c_ema9) and (c_close < c_ema21) and (c_rsi < 48)
+                reversal_buy = (active["action"] == "SELL") and c_st and (c_close > c_ema9) and (c_close > c_ema21) and (c_rsi > 52)
+
+                if reversal_sell or reversal_buy:
+                    if active.get("t2_hit"):
+                        exit_price = active["spot_t2"]
+                        reason_str = "Trend Reversal (T2 Secured)"
+                    else:
+                        exit_price = active["spot_t1"]
+                        reason_str = "Trend Reversal (T1 Secured)"
+
+                    pnl = (exit_price - active["entry"]) if active["action"] == "BUY" else (active["entry"] - exit_price)
+                    send_telegram(
+                        f"🔄 *TREND REVERSAL EXIT!*\n• Closed {active['action']} at {exit_price} ({reason_str})\n• PnL: {'+' if pnl > 0 else ''}{round(pnl, 2)} pts",
+                        target="all"
+                    )
+
+                    log_trade({
+                        "date": today_str, "action": active["action"],
+                        "entry": active["entry"], "exit": exit_price,
+                        "pnl_points": pnl, "reason": reason_str,
+                        "exit_time": now_ist.strftime("%H:%M")
+                    })
+
+                    next_action = "SELL" if reversal_sell else "BUY"
+                    state["active_trade"] = None
+                    state["last_exit_timestamp"] = None
+                    state["last_exit_reason"] = None
+                    trigger_entry(next_action, c_close, c_atr, now_ist, state)
+                    return
+
+        # Cooldown check (1 minute cooldown: 60 seconds after SL or T3)
         in_cooldown = False
         if state.get("last_exit_timestamp") and state.get("last_exit_reason") in ["SL", "T3"]:
             try:
                 last_exit_dt = datetime.strptime(state["last_exit_timestamp"], "%Y-%m-%d %H:%M:%S")
                 last_exit_dt = IST.localize(last_exit_dt)
-                if (now_ist - last_exit_dt).total_seconds() < 60:  # 1 minute cooldown
+                if (now_ist - last_exit_dt).total_seconds() < 60:
                     in_cooldown = True
             except Exception:
                 pass
@@ -426,11 +459,8 @@ def process_market_cycle(state):
 
             new_signal = "BUY" if buy_trigger else ("SELL" if sell_trigger else None)
 
-            if new_signal:
-                if in_cooldown:
-                    pass  # Cooldown active, skip signal
-                else:
-                    trigger_entry(new_signal, c_close, c_atr, now_ist, state)
+            if new_signal and not in_cooldown:
+                trigger_entry(new_signal, c_close, c_atr, now_ist, state)
 
     # 3:00 PM Auto Square Off (Target-based Exit Calculation)
     if dtime(15, 0) <= curr_time < dtime(15, 5):
@@ -481,7 +511,7 @@ def process_market_cycle(state):
             pdf_filename = f"SAS_Daily_Report_{today_str}.pdf"
             generate_pdf_report(
                 pdf_filename,
-                f"SAS LEVEL TRACKER - DAILY NIFTY SPOT REPORT",
+                "SAS LEVEL TRACKER - DAILY NIFTY SPOT REPORT",
                 f"<b>Date:</b> {today_str} | <b>Calculation:</b> Target/Exit Based P&L",
                 today_trades
             )
@@ -512,7 +542,7 @@ def process_market_cycle(state):
             monthly_pdf = f"SAS_Monthly_Expiry_Report_{month_str}.pdf"
             generate_pdf_report(
                 monthly_pdf,
-                f"SAS LEVEL TRACKER - MONTHLY EXPIRY DETAILED REPORT",
+                "SAS LEVEL TRACKER - MONTHLY EXPIRY DETAILED REPORT",
                 f"<b>Expiry Date:</b> {today_str} | <b>Cycle:</b> Expiry to Expiry Detailed P&L",
                 all_cycle_trades
             )
